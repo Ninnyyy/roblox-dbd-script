@@ -1,18 +1,36 @@
-local RunService = game:GetService("RunService")
-local HttpService = game:GetService("HttpService")
+--[[
+    Lua Test Script
+    Helpers.lua
+
+    Shared utility helpers.
+
+    Responsibilities:
+        - Safe function execution
+        - Type checking
+        - Table utilities
+        - String utilities
+        - Instance utilities
+        - Number utilities
+        - Player / character helpers
+        - Roblox object validation
+        - Deep copy
+        - Deep merge
+        - Clamp / rounding
+        - Runtime-safe helpers
+]]
+
+local Players = game:GetService("Players")
 
 local Helpers = {
     Name = "Helpers",
+    Version = "2.1.0",
+
+    Initialized = false,
 }
 
 
--- Constants
 
-
-Helpers.IsStudio = RunService:IsStudio()
-
-
--- Safe execution
+-- Safe Execution
 
 
 function Helpers:SafeCall(callback, ...)
@@ -20,8 +38,10 @@ function Helpers:SafeCall(callback, ...)
         return false, nil
     end
 
-    local success, result =
-        pcall(callback, ...)
+    local success, result = pcall(
+        callback,
+        ...
+    )
 
     if not success then
         warn(
@@ -35,136 +55,148 @@ function Helpers:SafeCall(callback, ...)
     return true, result
 end
 
-function Helpers:Try(callback, fallback, ...)
+
+function Helpers:Try(callback, ...)
     if type(callback) ~= "function" then
-        return fallback
+        return false, nil
     end
 
-    local success, result =
-        pcall(callback, ...)
-
-    if success then
-        return result
-    end
-
-    return fallback
+    return pcall(
+        callback,
+        ...
+    )
 end
 
 
--- Type helpers
 
+-- Type Helpers
 
-function Helpers:IsNil(value)
-    return value == nil
-end
 
 function Helpers:IsString(value)
     return type(value) == "string"
 end
 
+
 function Helpers:IsNumber(value)
     return type(value) == "number"
+        and value == value
 end
+
 
 function Helpers:IsBoolean(value)
     return type(value) == "boolean"
 end
 
+
 function Helpers:IsFunction(value)
     return type(value) == "function"
 end
+
 
 function Helpers:IsTable(value)
     return type(value) == "table"
 end
 
+
 function Helpers:IsInstance(value)
     return typeof(value) == "Instance"
 end
 
-function Helpers:IsVector2(value)
-    return typeof(value) == "Vector2"
+
+function Helpers:IsConnection(value)
+    return typeof(value) == "RBXScriptConnection"
 end
+
 
 function Helpers:IsVector3(value)
     return typeof(value) == "Vector3"
 end
 
+
 function Helpers:IsCFrame(value)
     return typeof(value) == "CFrame"
 end
+
 
 function Helpers:IsColor3(value)
     return typeof(value) == "Color3"
 end
 
 
--- String helpers
+
+-- String Helpers
+
+
+function Helpers:IsEmptyString(value)
+    return type(value) ~= "string"
+        or value == ""
+end
 
 
 function Helpers:Trim(value)
     if type(value) ~= "string" then
-        return ""
+        return value
     end
 
     return value:match("^%s*(.-)%s*$")
 end
 
+
 function Helpers:Lower(value)
     if type(value) ~= "string" then
-        return ""
+        return value
     end
 
     return string.lower(value)
 end
 
+
 function Helpers:Upper(value)
     if type(value) ~= "string" then
-        return ""
+        return value
     end
 
     return string.upper(value)
 end
 
-function Helpers:StartsWith(
-    value,
-    prefix
-)
+
+function Helpers:StartsWith(value, prefix)
     if type(value) ~= "string"
         or type(prefix) ~= "string" then
+
         return false
     end
 
-    return value:sub(
+    return string.sub(
+        value,
         1,
         #prefix
     ) == prefix
 end
 
-function Helpers:EndsWith(
-    value,
-    suffix
-)
+
+function Helpers:EndsWith(value, suffix)
     if type(value) ~= "string"
         or type(suffix) ~= "string" then
+
         return false
     end
 
-    if suffix == "" then
-        return true
+    if #suffix > #value then
+        return false
     end
 
-    return value:sub(
+    return string.sub(
+        value,
         -#suffix
     ) == suffix
 end
 
-function Helpers:Contains(
-    value,
-    search
-)
+
+function Helpers:Contains(value, search)
     if type(value) ~= "string"
         or type(search) ~= "string" then
+
         return false
     end
 
@@ -176,231 +208,251 @@ function Helpers:Contains(
     ) ~= nil
 end
 
-function Helpers:Capitalize(value)
-    if type(value) ~= "string"
-        or value == "" then
-        return ""
+
+function Helpers:Split(value, separator)
+    local result = {}
+
+    if type(value) ~= "string" then
+        return result
     end
 
-    return value:sub(1, 1):upper()
-        .. value:sub(2)
+    separator =
+        separator or "%s"
+
+    if separator == "%s" then
+        for part in string.gmatch(
+            value,
+            "%S+"
+        ) do
+            table.insert(
+                result,
+                part
+            )
+        end
+
+        return result
+    end
+
+    local pattern =
+        "([^"
+        .. separator
+        .. "]+)"
+
+    for part in string.gmatch(
+        value,
+        pattern
+    ) do
+        table.insert(
+            result,
+            part
+        )
+    end
+
+    return result
 end
 
-function Helpers:TitleCase(value)
-    if type(value) ~= "string" then
+
+function Helpers:Join(values, separator)
+    if type(values) ~= "table" then
         return ""
     end
 
-    return value:gsub(
-        "(%a)([%w_]*)",
-        function(first, rest)
-            return first:upper()
-                .. rest:lower()
-        end
+    return table.concat(
+        values,
+        separator or ", "
     )
 end
 
 
--- Number helpers
+
+-- Number Helpers
 
 
-function Helpers:ToNumber(
+function Helpers:Clamp(
     value,
-    fallback
+    minimum,
+    maximum
 )
-    local number =
-        tonumber(value)
-
-    if number == nil then
-        return fallback
+    if type(value) ~= "number" then
+        return minimum
     end
 
-    return number
+    if minimum > maximum then
+        minimum, maximum =
+            maximum, minimum
+    end
+
+    return math.clamp(
+        value,
+        minimum,
+        maximum
+    )
 end
 
-function Helpers:ToBoolean(
-    value,
-    fallback
-)
-    if type(value) == "boolean" then
-        return value
+
+function Helpers:Round(value, decimals)
+    if type(value) ~= "number" then
+        return 0
     end
-
-    if type(value) == "string" then
-        local lower =
-            string.lower(
-                self:Trim(value)
-            )
-
-        if lower == "true"
-            or lower == "yes"
-            or lower == "on"
-            or lower == "1" then
-            return true
-        end
-
-        if lower == "false"
-            or lower == "no"
-            or lower == "off"
-            or lower == "0" then
-            return false
-        end
-    end
-
-    if type(value) == "number" then
-        return value ~= 0
-    end
-
-    return fallback
-end
-
-function Helpers:FormatNumber(
-    value,
-    decimals
-)
-    value =
-        tonumber(value)
-        or 0
 
     decimals =
         tonumber(decimals)
         or 0
 
-    return string.format(
-        "%." .. decimals .. "f",
-        value
-    )
-end
-
-function Helpers:FormatCompact(
-    value
-)
-    value =
-        tonumber(value)
-        or 0
-
-    local absolute =
-        math.abs(value)
-
-    if absolute >= 1e9 then
-        return string.format(
-            "%.2fB",
-            value / 1e9
-        )
-    end
-
-    if absolute >= 1e6 then
-        return string.format(
-            "%.2fM",
-            value / 1e6
-        )
-    end
-
-    if absolute >= 1e3 then
-        return string.format(
-            "%.2fK",
-            value / 1e3
-        )
-    end
-
-    return tostring(
-        math.floor(value)
-    )
-end
-
-
--- Time helpers
-
-
-function Helpers:FormatTime(seconds)
-    seconds =
+    decimals =
         math.max(
             0,
-            tonumber(seconds)
-                or 0
+            math.floor(decimals)
         )
 
-    local hours =
-        math.floor(
-            seconds / 3600
-        )
+    local multiplier =
+        10 ^ decimals
 
-    local minutes =
-        math.floor(
-            (seconds % 3600)
-            / 60
-        )
+    return math.floor(
+        value * multiplier + 0.5
+    ) / multiplier
+end
 
-    local remaining =
-        math.floor(
-            seconds % 60
-        )
 
-    if hours > 0 then
-        return string.format(
-            "%02d:%02d:%02d",
-            hours,
-            minutes,
-            remaining
-        )
+function Helpers:Floor(value)
+    if type(value) ~= "number" then
+        return 0
     end
 
-    return string.format(
-        "%02d:%02d",
-        minutes,
-        remaining
-    )
-end
-
-function Helpers:Now()
-    return os.clock()
-end
-
-function Helpers:UnixTime()
-    return os.time()
+    return math.floor(value)
 end
 
 
--- Table helpers
+function Helpers:Ceil(value)
+    if type(value) ~= "number" then
+        return 0
+    end
+
+    return math.ceil(value)
+end
 
 
-function Helpers:TableContains(
-    tableValue,
-    value
+function Helpers:Abs(value)
+    if type(value) ~= "number" then
+        return 0
+    end
+
+    return math.abs(value)
+end
+
+
+function Helpers:Lerp(a, b, alpha)
+    if type(a) ~= "number"
+        or type(b) ~= "number" then
+
+        return a
+    end
+
+    alpha =
+        self:Clamp(
+            tonumber(alpha) or 0,
+            0,
+            1
+        )
+
+    return a + (b - a) * alpha
+end
+
+
+function Helpers:Map(
+    value,
+    inputMin,
+    inputMax,
+    outputMin,
+    outputMax
 )
-    if type(tableValue) ~= "table" then
-        return false
+    if inputMax == inputMin then
+        return outputMin
     end
 
-    for _, item in pairs(tableValue) do
-        if item == value then
-            return true
+    local alpha =
+        (value - inputMin)
+        / (inputMax - inputMin)
+
+    return outputMin
+        + (
+            outputMax - outputMin
+        ) * alpha
+end
+
+
+
+-- Table Helpers
+
+
+function Helpers:DeepCopy(value, seen)
+    if type(value) ~= "table" then
+        return value
+    end
+
+    seen =
+        seen or {}
+
+    if seen[value] then
+        return seen[value]
+    end
+
+    local copy = {}
+
+    seen[value] = copy
+
+    for key, child in pairs(value) do
+        copy[
+            self:DeepCopy(
+                key,
+                seen
+            )
+        ] =
+            self:DeepCopy(
+                child,
+                seen
+            )
+    end
+
+    return copy
+end
+
+
+function Helpers:DeepMerge(
+    original,
+    incoming
+)
+    local result =
+        self:DeepCopy(original)
+
+    if type(incoming) ~= "table" then
+        return result
+    end
+
+    for key, value in pairs(
+        incoming
+    ) do
+
+        if type(value) == "table"
+            and type(result[key]) == "table" then
+
+            result[key] =
+                self:DeepMerge(
+                    result[key],
+                    value
+                )
+
+        else
+            result[key] =
+                self:DeepCopy(value)
         end
     end
 
-    return false
+    return result
 end
 
-function Helpers:TableFind(
-    tableValue,
-    value
-)
-    if type(tableValue) ~= "table" then
-        return nil
-    end
 
-    for key, item in pairs(tableValue) do
-        if item == value then
-            return key
-        end
-    end
-
-    return nil
-end
-
-function Helpers:TableCount(
-    tableValue
-)
+function Helpers:TableCount(tableValue)
     if type(tableValue) ~= "table" then
         return 0
     end
@@ -414,102 +466,92 @@ function Helpers:TableCount(
     return count
 end
 
-function Helpers:ArrayCount(
-    tableValue
-)
+
+function Helpers:TableIsEmpty(tableValue)
     if type(tableValue) ~= "table" then
-        return 0
+        return true
     end
 
-    return #tableValue
+    return next(tableValue) == nil
 end
 
-function Helpers:ClearTable(
-    tableValue
+
+function Helpers:TableContains(
+    tableValue,
+    target
 )
     if type(tableValue) ~= "table" then
         return false
     end
 
-    for key in pairs(tableValue) do
-        tableValue[key] = nil
+    for _, value in pairs(tableValue) do
+        if value == target then
+            return true
+        end
     end
+
+    return false
+end
+
+
+function Helpers:TableFind(
+    tableValue,
+    target
+)
+    if type(tableValue) ~= "table" then
+        return nil
+    end
+
+    for key, value in pairs(tableValue) do
+        if value == target then
+            return key
+        end
+    end
+
+    return nil
+end
+
+
+function Helpers:TableClear(tableValue)
+    if type(tableValue) ~= "table" then
+        return false
+    end
+
+    table.clear(tableValue)
 
     return true
 end
 
-function Helpers:CopyTable(
-    tableValue,
-    deep
-)
+
+function Helpers:ArrayCopy(tableValue)
     if type(tableValue) ~= "table" then
-        return tableValue
+        return {}
     end
 
-    local copy = {}
+    local result = {}
 
-    for key, value in pairs(tableValue) do
-        if deep
-            and type(value) == "table" then
-            copy[key] =
-                self:CopyTable(
-                    value,
-                    true
-                )
-        else
-            copy[key] = value
-        end
+    for index, value in ipairs(
+        tableValue
+    ) do
+        result[index] = value
     end
 
-    return copy
+    return result
 end
 
-function Helpers:MergeTables(
-    target,
-    source,
-    deep
-)
-    if type(target) ~= "table"
-        or type(source) ~= "table" then
-        return target
-    end
-
-    for key, value in pairs(source) do
-        if deep
-            and type(value) == "table"
-            and type(target[key]) == "table" then
-            self:MergeTables(
-                target[key],
-                value,
-                true
-            )
-        elseif deep
-            and type(value) == "table" then
-            target[key] =
-                self:CopyTable(
-                    value,
-                    true
-                )
-        else
-            target[key] = value
-        end
-    end
-
-    return target
-end
 
 function Helpers:ArrayRemove(
-    array,
-    value
+    tableValue,
+    target
 )
-    if type(array) ~= "table" then
+    if type(tableValue) ~= "table" then
         return false
     end
 
-    for index = #array, 1, -1 do
-        if array[index] == value then
+    for index = #tableValue, 1, -1 do
+        if tableValue[index] == target then
             table.remove(
-                array,
+                tableValue,
                 index
             )
 
@@ -520,32 +562,22 @@ function Helpers:ArrayRemove(
     return false
 end
 
-function Helpers:ArrayRemoveAll(
-    array,
-    value
-)
-    if type(array) ~= "table" then
-        return 0
+
+
+-- Instance Helpers
+
+
+function Helpers:IsAlive(instance)
+    if not instance then
+        return false
     end
 
-    local removed = 0
-
-    for index = #array, 1, -1 do
-        if array[index] == value then
-            table.remove(
-                array,
-                index
-            )
-
-            removed += 1
-        end
+    if not instance.Parent then
+        return false
     end
 
-    return removed
+    return true
 end
-
-
--- Instance helpers
 
 
 function Helpers:Find(
@@ -554,57 +586,53 @@ function Helpers:Find(
 )
     if not parent
         or type(name) ~= "string" then
+
         return nil
     end
 
-    return parent:FindFirstChild(
-        name
-    )
-end
+    local success, result =
+        pcall(function()
+            return parent:FindFirstChild(
+                name
+            )
+        end)
 
-function Helpers:FindClass(
-    parent,
-    className
-)
-    if not parent
-        or type(className) ~= "string" then
-        return nil
-    end
-
-    for _, child in ipairs(
-        parent:GetChildren()
-    ) do
-        if child:IsA(className) then
-            return child
-        end
+    if success then
+        return result
     end
 
     return nil
 end
 
-function Helpers:IsDescendant(
-    instance,
-    ancestor
+
+function Helpers:WaitFor(
+    parent,
+    name,
+    timeout
 )
-    if not instance
-        or not ancestor then
-        return false
+    if not parent
+        or type(name) ~= "string" then
+
+        return nil
     end
 
     local success, result =
         pcall(function()
-            return instance:IsDescendantOf(
-                ancestor
+            return parent:WaitForChild(
+                name,
+                timeout
             )
         end)
 
-    return success
-        and result == true
+    if success then
+        return result
+    end
+
+    return nil
 end
 
-function Helpers:SafeDestroy(
-    instance
-)
+
+function Helpers:Destroy(instance)
     if not instance then
         return false
     end
@@ -617,128 +645,282 @@ function Helpers:SafeDestroy(
     return success
 end
 
-function Helpers:SetProperty(
+
+function Helpers:SetParent(
     instance,
-    property,
-    value
+    parent
 )
-    if not instance
-        or type(property) ~= "string" then
+    if not instance then
         return false
     end
 
     local success =
         pcall(function()
-            instance[property] = value
+            instance.Parent = parent
         end)
 
     return success
 end
 
-function Helpers:GetProperty(
-    instance,
-    property,
-    fallback
+
+
+-- Character Helpers
+
+
+function Helpers:GetCharacter(
+    player
 )
-    if not instance
-        or type(property) ~= "string" then
-        return fallback
-    end
-
-    local success, value =
-        pcall(function()
-            return instance[property]
-        end)
-
-    if not success then
-        return fallback
-    end
-
-    return value
-end
-
-
--- Roblox object creation
-
-
-function Helpers:Create(
-    className,
-    properties,
-    parent
-)
-    if type(className) ~= "string"
-        or className == "" then
+    if not player then
         return nil
     end
 
-    local success, instance =
-        pcall(function()
-            return Instance.new(
-                className
-            )
-        end)
+    return player.Character
+end
 
-    if not success
-        or not instance then
-        warn(
-            "[Lua Test] Failed to create:",
-            className
+
+function Helpers:GetHumanoid(
+    character
+)
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChildOfClass(
+        "Humanoid"
+    )
+end
+
+
+function Helpers:GetRoot(
+    character
+)
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChild(
+        "HumanoidRootPart"
+    )
+end
+
+
+function Helpers:GetRootPosition(
+    character
+)
+    local root =
+        self:GetRoot(character)
+
+    if not root then
+        return nil
+    end
+
+    return root.Position
+end
+
+
+function Helpers:IsCharacterAlive(
+    character
+)
+    local humanoid =
+        self:GetHumanoid(
+            character
         )
 
-        return nil
+    if not humanoid then
+        return false
     end
 
-    if type(properties) == "table" then
-        for property, value in pairs(
-            properties
-        ) do
-            pcall(function()
-                instance[property] =
-                    value
-            end)
-        end
-    end
-
-    if parent then
-        pcall(function()
-            instance.Parent = parent
-        end)
-    end
-
-    return instance
+    return humanoid.Health > 0
 end
 
 
--- Signal helpers
-
-
-function Helpers:Connect(
-    signal,
-    callback
+function Helpers:GetHealthPercent(
+    character
 )
-    if not signal
-        or type(callback) ~= "function" then
-        return nil
+    local humanoid =
+        self:GetHumanoid(
+            character
+        )
+
+    if not humanoid then
+        return 0
     end
 
-    local success, connection =
-        pcall(function()
-            return signal:Connect(
-                callback
-            )
-        end)
-
-    if not success then
-        return nil
+    if humanoid.MaxHealth <= 0 then
+        return 0
     end
 
-    return connection
+    return math.clamp(
+        humanoid.Health
+            / humanoid.MaxHealth,
+        0,
+        1
+    )
 end
+
+
+function Helpers:GetCharacterDistance(
+    characterA,
+    characterB
+)
+    local rootA =
+        self:GetRoot(characterA)
+
+    local rootB =
+        self:GetRoot(characterB)
+
+    if not rootA
+        or not rootB then
+
+        return math.huge
+    end
+
+    return (
+        rootA.Position
+        - rootB.Position
+    ).Magnitude
+end
+
+
+
+-- Player Helpers
+
+
+function Helpers:GetLocalPlayer()
+    return Players.LocalPlayer
+end
+
+
+function Helpers:GetPlayers()
+    return Players:GetPlayers()
+end
+
+
+function Helpers:IsLocalPlayer(
+    player
+)
+    return player
+        ~= nil
+        and player
+        == Players.LocalPlayer
+end
+
+
+function Helpers:GetPlayerFromCharacter(
+    character
+)
+    if not character then
+        return nil
+    end
+
+    return Players:GetPlayerFromCharacter(
+        character
+    )
+end
+
+
+function Helpers:IsPlayerAlive(
+    player
+)
+    if not player then
+        return false
+    end
+
+    return self:IsCharacterAlive(
+        player.Character
+    )
+end
+
+
+function Helpers:GetPlayerDistance(
+    playerA,
+    playerB
+)
+    if not playerA
+        or not playerB then
+
+        return math.huge
+    end
+
+    return self:GetCharacterDistance(
+        playerA.Character,
+        playerB.Character
+    )
+end
+
+
+
+-- Humanoid Helpers
+
+
+function Helpers:GetHumanoidState(
+    character
+)
+    local humanoid =
+        self:GetHumanoid(
+            character
+        )
+
+    if not humanoid then
+        return nil
+    end
+
+    return humanoid:GetState()
+end
+
+
+function Helpers:IsGrounded(
+    character
+)
+    local humanoid =
+        self:GetHumanoid(
+            character
+        )
+
+    if not humanoid then
+        return false
+    end
+
+    local state =
+        humanoid:GetState()
+
+    return state
+        == Enum.HumanoidStateType.Running
+        or state
+        == Enum.HumanoidStateType.RunningNoPhysics
+end
+
+
+function Helpers:IsMoving(
+    character
+)
+    local humanoid =
+        self:GetHumanoid(
+            character
+        )
+
+    if not humanoid then
+        return false
+    end
+
+    return humanoid.MoveDirection.Magnitude > 0
+end
+
+
+
+-- Connection Helpers
+
 
 function Helpers:Disconnect(
     connection
 )
     if not connection then
+        return false
+    end
+
+    if typeof(connection)
+        ~= "RBXScriptConnection" then
+
         return false
     end
 
@@ -751,177 +933,161 @@ function Helpers:Disconnect(
 end
 
 
--- Task helpers
-
-
-function Helpers:Delay(
-    duration,
+function Helpers:Connect(
+    signal,
     callback
 )
-    if type(callback) ~= "function" then
+    if not signal
+        or type(callback) ~= "function" then
+
         return nil
     end
 
-    duration =
-        math.max(
-            0,
-            tonumber(duration)
-                or 0
+    local success, connection =
+        pcall(function()
+            return signal:Connect(
+                callback
+            )
+        end)
+
+    if not success then
+        warn(
+            "[Lua Test] Helpers.Connect:",
+            connection
         )
 
-    return task.delay(
-        duration,
-        callback
-    )
-end
-
-function Helpers:Spawn(
-    callback
-)
-    if type(callback) ~= "function" then
         return nil
     end
 
-    return task.spawn(
-        callback
-    )
+    return connection
 end
 
-function Helpers:Cancel(
-    thread
+
+
+-- Path Helpers
+
+
+function Helpers:SplitPath(path)
+    local result = {}
+
+    if type(path) ~= "string" then
+        return result
+    end
+
+    for part in string.gmatch(
+        path,
+        "[^%.]+"
+    ) do
+        table.insert(
+            result,
+            part
+        )
+    end
+
+    return result
+end
+
+
+function Helpers:GetPath(
+    root,
+    path
 )
-    if not thread then
+    if type(root) ~= "table"
+        or type(path) ~= "string" then
+
+        return nil
+    end
+
+    local parts =
+        self:SplitPath(path)
+
+    if #parts == 0 then
+        return nil
+    end
+
+    local current = root
+
+    for _, part in ipairs(parts) do
+        if type(current) ~= "table" then
+            return nil
+        end
+
+        current =
+            current[part]
+
+        if current == nil then
+            return nil
+        end
+    end
+
+    return current
+end
+
+
+function Helpers:SetPath(
+    root,
+    path,
+    value
+)
+    if type(root) ~= "table"
+        or type(path) ~= "string" then
+
         return false
     end
 
-    local success =
-        pcall(function()
-            task.cancel(thread)
-        end)
+    local parts =
+        self:SplitPath(path)
 
-    return success
-end
-
-
--- JSON helpers
-
-
-function Helpers:EncodeJSON(
-    value
-)
-    local success, result =
-        pcall(function()
-            return HttpService:JSONEncode(
-                value
-            )
-        end)
-
-    if not success then
-        return nil
+    if #parts == 0 then
+        return false
     end
 
-    return result
-end
+    local current = root
 
-function Helpers:DecodeJSON(
-    value
-)
-    if type(value) ~= "string" then
-        return nil
+    for index = 1, #parts - 1 do
+        local part =
+            parts[index]
+
+        if type(current[part])
+            ~= "table" then
+
+            current[part] = {}
+        end
+
+        current =
+            current[part]
     end
 
-    local success, result =
-        pcall(function()
-            return HttpService:JSONDecode(
-                value
-            )
-        end)
+    current[
+        parts[#parts]
+    ] = value
 
-    if not success then
-        return nil
+    return true
+end
+
+
+
+-- Initialization
+
+
+function Helpers:Initialize()
+    if self.Initialized then
+        return self
     end
 
-    return result
+    self.Initialized = true
+
+    return self
 end
 
 
--- Color helpers
+
+-- Destroy
 
 
-function Helpers:IsColor(
-    value
-)
-    return typeof(value) == "Color3"
+function Helpers:Destroy()
+    self.Initialized = false
 end
 
-function Helpers:ColorFromRGB(
-    r,
-    g,
-    b
-)
-    return Color3.fromRGB(
-        tonumber(r) or 255,
-        tonumber(g) or 255,
-        tonumber(b) or 255
-    )
-end
-
-function Helpers:ColorToRGB(
-    color
-)
-    if not self:IsColor(color) then
-        return nil
-    end
-
-    return {
-        R = math.floor(
-            color.R * 255 + 0.5
-        ),
-
-        G = math.floor(
-            color.G * 255 + 0.5
-        ),
-
-        B = math.floor(
-            color.B * 255 + 0.5
-        ),
-    }
-end
-
-
--- Debug helpers
-
-
-function Helpers:Debug(
-    ...)
-    print(
-        "[Lua Test]",
-        ...
-    )
-end
-
-function Helpers:Warn(
-    ...
-)
-    warn(
-        "[Lua Test]",
-        ...
-    )
-end
-
-function Helpers:Assert(
-    condition,
-    message
-)
-    if condition then
-        return true
-    end
-
-    error(
-        message
-            or "[Lua Test] Assertion failed",
-        2
-    )
-end
 
 return Helpers

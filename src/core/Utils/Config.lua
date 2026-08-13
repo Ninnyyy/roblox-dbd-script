@@ -1,13 +1,40 @@
+--[[
+    Lua Test Script
+    Config.lua
+
+    Central configuration system.
+
+    Responsibilities:
+        - Default configuration
+        - Runtime values
+        - Nested paths
+        - Feature settings
+        - Validation
+        - Change listeners
+        - Global listeners
+        - History
+        - Snapshots
+        - Import / Export
+        - Reset
+        - Schema registration
+        - Runtime setting registration
+        - Locking
+        - Batch updates
+        - Diffing
+        - Version metadata
+]]
+
 local Config = {}
 
 Config.__index = Config
+
 
 
 -- Metadata
 
 
 Config.Name = "Config"
-Config.Version = "2.0.0"
+Config.Version = "3.0.0"
 
 Config.Initialized = false
 Config.Locked = false
@@ -18,7 +45,11 @@ Config.Defaults = {}
 Config.Changed = {}
 Config.History = {}
 
+Config.Schema = {}
+Config.Metadata = {}
+
 Config.MaxHistory = 100
+
 
 
 -- Defaults
@@ -26,9 +57,9 @@ Config.MaxHistory = 100
 
 Config.Defaults = {
 
-    -- ========================================================
+    --====================================================--
     -- General
-    -- ========================================================
+    --====================================================--
 
     General = {
         Enabled = true,
@@ -36,9 +67,10 @@ Config.Defaults = {
         Debug = false,
     },
 
-    -- ========================================================
+
+    --====================================================--
     -- ESP
-    -- ========================================================
+    --====================================================--
 
     ESP = {
         Enabled = false,
@@ -63,9 +95,10 @@ Config.Defaults = {
         RefreshRate = 30,
     },
 
-    -- ========================================================
+
+    --====================================================--
     -- Movement
-    -- ========================================================
+    --====================================================--
 
     Movement = {
         Enabled = false,
@@ -87,9 +120,10 @@ Config.Defaults = {
         RestoreOnDisable = true,
     },
 
-    -- ========================================================
+
+    --====================================================--
     -- Teleports
-    -- ========================================================
+    --====================================================--
 
     Teleports = {
         Enabled = true,
@@ -97,9 +131,10 @@ Config.Defaults = {
         OffsetDistance = 4,
     },
 
-    -- ========================================================
+
+    --====================================================--
     -- Game Features
-    -- ========================================================
+    --====================================================--
 
     GameFeatures = {
         Enabled = false,
@@ -117,9 +152,10 @@ Config.Defaults = {
         UpdateRate = 30,
     },
 
-    -- ========================================================
+
+    --====================================================--
     -- UI
-    -- ========================================================
+    --====================================================--
 
     UI = {
         Enabled = true,
@@ -135,10 +171,12 @@ Config.Defaults = {
 }
 
 
+
 -- Helpers
 
 
 local function DeepCopy(value, seen)
+
     if type(value) ~= "table" then
         return value
     end
@@ -154,16 +192,24 @@ local function DeepCopy(value, seen)
     seen[value] = copy
 
     for key, child in pairs(value) do
+
         copy[
             DeepCopy(key, seen)
-        ] = DeepCopy(child, seen)
+        ] =
+            DeepCopy(child, seen)
     end
 
     return copy
 end
 
-local function DeepMerge(original, incoming)
-    local result = DeepCopy(original)
+
+local function DeepMerge(
+    original,
+    incoming
+)
+
+    local result =
+        DeepCopy(original)
 
     if type(incoming) ~= "table" then
         return result
@@ -181,6 +227,7 @@ local function DeepMerge(original, incoming)
                 )
 
         else
+
             result[key] =
                 DeepCopy(value)
         end
@@ -189,7 +236,9 @@ local function DeepMerge(original, incoming)
     return result
 end
 
+
 local function SplitPath(path)
+
     local parts = {}
 
     if type(path) ~= "string" then
@@ -210,11 +259,12 @@ local function SplitPath(path)
     return parts
 end
 
-local function JoinPath(parts)
-    return table.concat(parts, ".")
-end
 
-local function GetPathFromTable(root, path)
+local function GetPathFromTable(
+    root,
+    path
+)
+
     local parts =
         SplitPath(path)
 
@@ -222,7 +272,8 @@ local function GetPathFromTable(root, path)
         return nil
     end
 
-    local current = root
+    local current =
+        root
 
     for _, part in ipairs(parts) do
 
@@ -241,7 +292,13 @@ local function GetPathFromTable(root, path)
     return current
 end
 
-local function SetPathInTable(root, path, value)
+
+local function SetPathInTable(
+    root,
+    path,
+    value
+)
+
     local parts =
         SplitPath(path)
 
@@ -249,7 +306,8 @@ local function SetPathInTable(root, path, value)
         return false
     end
 
-    local current = root
+    local current =
+        root
 
     for index = 1, #parts - 1 do
 
@@ -271,7 +329,12 @@ local function SetPathInTable(root, path, value)
     return true
 end
 
-local function RemovePathFromTable(root, path)
+
+local function RemovePathFromTable(
+    root,
+    path
+)
+
     local parts =
         SplitPath(path)
 
@@ -279,7 +342,8 @@ local function RemovePathFromTable(root, path)
         return false
     end
 
-    local current = root
+    local current =
+        root
 
     for index = 1, #parts - 1 do
 
@@ -308,7 +372,12 @@ local function RemovePathFromTable(root, path)
     return true
 end
 
-local function ValuesEqual(a, b)
+
+local function ValuesEqual(
+    a,
+    b
+)
+
     if type(a) ~= type(b) then
         return false
     end
@@ -318,15 +387,18 @@ local function ValuesEqual(a, b)
     end
 
     for key, value in pairs(a) do
+
         if not ValuesEqual(
             value,
             b[key]
         ) then
+
             return false
         end
     end
 
     for key in pairs(b) do
+
         if a[key] == nil then
             return false
         end
@@ -336,29 +408,41 @@ local function ValuesEqual(a, b)
 end
 
 
--- Internal Events
+local function TypeName(value)
+
+    if typeof then
+        return typeof(value)
+    end
+
+    return type(value)
+end
 
 
-function Config:_FireChanged(
-    path,
+
+-- Events
+
+
+function Config:_FireListeners(
+    listeners,
     newValue,
-    oldValue
+    oldValue,
+    path
 )
-    local listeners =
-        self.Changed[path]
 
     if not listeners then
         return
     end
 
-    for _, callback in ipairs(listeners) do
+    for _, callback in ipairs(
+        listeners
+    ) do
 
         if type(callback) == "function" then
 
             task.spawn(
                 function()
 
-                    local success, err =
+                    local success, errorMessage =
                         pcall(
                             callback,
                             newValue,
@@ -373,23 +457,50 @@ function Config:_FireChanged(
                         ) then
 
                         warn(
-                            "[Config] Change callback error:",
-                            err
+                            "[Lua Test] Config callback error:",
+                            errorMessage
                         )
                     end
 
                 end
             )
-
         end
     end
 end
+
+
+function Config:_FireChanged(
+    path,
+    newValue,
+    oldValue
+)
+
+    self:_FireListeners(
+        self.Changed[path],
+        newValue,
+        oldValue,
+        path
+    )
+
+    self:_FireListeners(
+        self.Changed["*"],
+        newValue,
+        oldValue,
+        path
+    )
+end
+
+
+
+-- History
+
 
 function Config:_RecordHistory(
     path,
     newValue,
     oldValue
 )
+
     table.insert(
         self.History,
         {
@@ -401,7 +512,8 @@ function Config:_RecordHistory(
             OldValue =
                 DeepCopy(oldValue),
 
-            Time = os.clock(),
+            Time =
+                os.clock(),
         }
     )
 
@@ -416,10 +528,14 @@ function Config:_RecordHistory(
 end
 
 
+
 -- Initialize
 
 
-function Config:Initialize(initialValues)
+function Config:Initialize(
+    initialValues
+)
+
     if self.Initialized then
         return self
     end
@@ -432,6 +548,7 @@ function Config:Initialize(initialValues)
     self.History = {}
 
     if type(initialValues) == "table" then
+
         self.Values =
             DeepMerge(
                 self.Values,
@@ -446,20 +563,23 @@ function Config:Initialize(initialValues)
 end
 
 
--- Ensure
-
-
 function Config:_EnsureInitialized()
+
     if not self.Initialized then
         self:Initialize()
     end
 end
 
 
+
 -- Get
 
 
-function Config:Get(path, default)
+function Config:Get(
+    path,
+    default
+)
+
     self:_EnsureInitialized()
 
     local value =
@@ -476,10 +596,8 @@ function Config:Get(path, default)
 end
 
 
--- Get Raw
-
-
 function Config:GetRaw(path)
+
     self:_EnsureInitialized()
 
     return GetPathFromTable(
@@ -489,18 +607,250 @@ function Config:GetRaw(path)
 end
 
 
+function Config:Has(path)
+
+    self:_EnsureInitialized()
+
+    return GetPathFromTable(
+        self.Values,
+        path
+    ) ~= nil
+end
+
+
+
+-- Schema
+
+
+function Config:RegisterSchema(
+    path,
+    schema
+)
+
+    if type(path) ~= "string"
+        or path == "" then
+
+        return false,
+            "Invalid schema path"
+    end
+
+    if type(schema) ~= "table" then
+
+        return false,
+            "Schema must be a table"
+    end
+
+    self.Schema[path] =
+        DeepCopy(schema)
+
+    return true
+end
+
+
+function Config:GetSchema(path)
+
+    return self.Schema[path]
+end
+
+
+function Config:RemoveSchema(path)
+
+    if not self.Schema[path] then
+        return false
+    end
+
+    self.Schema[path] = nil
+
+    return true
+end
+
+
+function Config:_ValidateValue(
+    path,
+    value
+)
+
+    local schema =
+        self.Schema[path]
+
+    if not schema then
+        return true
+    end
+
+
+    -- Type validation
+
+    if schema.Type then
+
+        local actual =
+            TypeName(value)
+
+        local expected =
+            schema.Type
+
+        if actual ~= expected then
+
+            return false,
+                "Expected "
+                    .. tostring(expected)
+                    .. ", got "
+                    .. tostring(actual)
+        end
+    end
+
+
+    -- Number limits
+
+    if type(value) == "number" then
+
+        if schema.Min
+            and value < schema.Min then
+
+            return false,
+                "Value is below minimum"
+        end
+
+        if schema.Max
+            and value > schema.Max then
+
+            return false,
+                "Value exceeds maximum"
+        end
+    end
+
+
+    -- String length
+
+    if type(value) == "string" then
+
+        if schema.MinLength
+            and #value < schema.MinLength then
+
+            return false,
+                "String is too short"
+        end
+
+        if schema.MaxLength
+            and #value > schema.MaxLength then
+
+            return false,
+                "String is too long"
+        end
+    end
+
+
+    -- Enum values
+
+    if schema.Enum then
+
+        local valid = false
+
+        for _, allowed in ipairs(
+            schema.Enum
+        ) do
+
+            if value == allowed then
+                valid = true
+                break
+            end
+        end
+
+        if not valid then
+
+            return false,
+                "Value is not allowed"
+        end
+    end
+
+
+    -- Custom validator
+
+    if type(schema.Validate) ==
+        "function" then
+
+        local success, result =
+            pcall(
+                schema.Validate,
+                value,
+                path,
+                self
+            )
+
+        if not success then
+
+            return false,
+                result
+        end
+
+        if result == false then
+
+            return false,
+                "Custom validation failed"
+        end
+
+        if type(result) == "string" then
+
+            return false,
+                result
+        end
+    end
+
+    return true
+end
+
+
+function Config:ValidateValue(
+    path,
+    value
+)
+
+    return self:_ValidateValue(
+        path,
+        value
+    )
+end
+
+
+
 -- Set
 
 
-function Config:Set(path, value)
+function Config:Set(
+    path,
+    value
+)
+
     self:_EnsureInitialized()
 
     if self.Locked then
-        return false, "Config is locked"
+        return false,
+            "Config is locked"
     end
+
+    if type(path) ~= "string"
+        or path == "" then
+
+        return false,
+            "Invalid path"
+    end
+
+
+    local valid, validationError =
+        self:_ValidateValue(
+            path,
+            value
+        )
+
+    if not valid then
+
+        return false,
+            validationError
+    end
+
 
     local oldValue =
         self:GetRaw(path)
+
 
     if ValuesEqual(
         oldValue,
@@ -510,6 +860,7 @@ function Config:Set(path, value)
         return true
     end
 
+
     local success =
         SetPathInTable(
             self.Values,
@@ -518,8 +869,11 @@ function Config:Set(path, value)
         )
 
     if not success then
-        return false, "Invalid path"
+
+        return false,
+            "Invalid path"
     end
+
 
     self:_RecordHistory(
         path,
@@ -537,60 +891,105 @@ function Config:Set(path, value)
 end
 
 
--- Set Multiple
+
+-- Set Many
 
 
-function Config:SetMany(values)
+function Config:SetMany(
+    values
+)
+
     self:_EnsureInitialized()
 
     if self.Locked then
-        return false, "Config is locked"
+        return false,
+            "Config is locked"
     end
 
     if type(values) ~= "table" then
-        return false, "Values must be a table"
+
+        return false,
+            "Values must be a table"
     end
 
     local changed = 0
+    local failed = {}
 
     for path, value in pairs(values) do
 
-        local success =
+        local success, errorMessage =
             self:Set(
                 path,
                 value
             )
 
         if success then
+
             changed += 1
+
+        else
+
+            failed[path] =
+                errorMessage
         end
     end
 
-    return true, changed
+    return true, {
+        Changed = changed,
+        Failed = failed,
+    }
 end
 
 
--- Has
+
+-- Sections
 
 
-function Config:Has(path)
-    self:_EnsureInitialized()
+function Config:GetSection(
+    name
+)
 
-    return GetPathFromTable(
-        self.Values,
-        path
-    ) ~= nil
+    local section =
+        self:Get(name)
+
+    if type(section) ~= "table" then
+        return nil
+    end
+
+    return DeepCopy(section)
 end
+
+
+function Config:SetSection(
+    name,
+    values
+)
+
+    if type(name) ~= "string"
+        or type(values) ~= "table" then
+
+        return false,
+            "Invalid section"
+    end
+
+    return self:Set(
+        name,
+        values
+    )
+end
+
 
 
 -- Remove
 
 
 function Config:Remove(path)
+
     self:_EnsureInitialized()
 
     if self.Locked then
-        return false, "Config is locked"
+        return false,
+            "Config is locked"
     end
 
     local oldValue =
@@ -626,76 +1025,91 @@ function Config:Remove(path)
 end
 
 
+
 -- Defaults
 
 
-function Config:GetDefault(path)
+function Config:GetDefault(
+    path
+)
+
     return GetPathFromTable(
         self.Defaults,
         path
     )
 end
 
+
 function Config:GetDefaults()
+
     return DeepCopy(
         self.Defaults
     )
 end
 
 
+
 -- Reset
 
 
 function Config:Reset(path)
+
     self:_EnsureInitialized()
 
     if self.Locked then
-        return false, "Config is locked"
+        return false,
+            "Config is locked"
     end
 
+
     if not path then
+
+        local oldValues =
+            DeepCopy(
+                self.Values
+            )
 
         self.Values =
             DeepCopy(
                 self.Defaults
             )
 
-        table.insert(
-            self.History,
-            {
-                Path = "*",
-                NewValue =
-                    DeepCopy(
-                        self.Values
-                    ),
-                OldValue = nil,
-                Time = os.clock(),
-            }
+        self:_RecordHistory(
+            "*",
+            self.Values,
+            oldValues
+        )
+
+        self:_FireChanged(
+            "*",
+            self.Values,
+            oldValues
         )
 
         return true
     end
 
+
     local defaultValue =
         self:GetDefault(path)
 
     if defaultValue == nil then
-        return false, "No default exists"
+
+        return false,
+            "No default exists"
     end
 
     return self:Set(
         path,
-        DeepCopy(
-            defaultValue
-        )
+        DeepCopy(defaultValue)
     )
 end
 
 
--- Reset Section
+function Config:ResetSection(
+    section
+)
 
-
-function Config:ResetSection(section)
     if type(section) ~= "string" then
         return false
     end
@@ -703,58 +1117,12 @@ function Config:ResetSection(section)
     return self:Reset(section)
 end
 
+
 function Config:ResetAll()
+
     return self:Reset()
 end
 
-
--- Sections
-
-
-function Config:GetSection(name)
-    local section =
-        self:Get(name)
-
-    if type(section) ~= "table" then
-        return nil
-    end
-
-    return DeepCopy(section)
-end
-
-function Config:SetSection(name, values)
-    self:_EnsureInitialized()
-
-    if self.Locked then
-        return false, "Config is locked"
-    end
-
-    if type(name) ~= "string"
-        or type(values) ~= "table" then
-
-        return false
-    end
-
-    local oldValue =
-        self:GetRaw(name)
-
-    self.Values[name] =
-        DeepCopy(values)
-
-    self:_RecordHistory(
-        name,
-        values,
-        oldValue
-    )
-
-    self:_FireChanged(
-        name,
-        values,
-        oldValue
-    )
-
-    return true
-end
 
 
 -- Feature Helpers
@@ -763,23 +1131,30 @@ end
 function Config:IsFeatureEnabled(
     featureName
 )
+
     return self:Get(
         featureName .. ".Enabled",
         false
     ) == true
 end
 
+
 function Config:SetFeatureEnabled(
     featureName,
     enabled
 )
+
     return self:Set(
         featureName .. ".Enabled",
         enabled == true
     )
 end
 
-function Config:Toggle(featureName)
+
+function Config:Toggle(
+    featureName
+)
+
     local current =
         self:IsFeatureEnabled(
             featureName
@@ -792,14 +1167,27 @@ function Config:Toggle(featureName)
 end
 
 
--- Increment
+function Config:GetFeatureSettings(
+    featureName
+)
+
+    return self:GetSection(
+        featureName
+    )
+end
+
+
+
+-- Increment / Decrement
 
 
 function Config:Increment(
     path,
     amount
 )
-    amount = amount or 1
+
+    amount =
+        amount or 1
 
     local current =
         self:Get(
@@ -810,7 +1198,8 @@ function Config:Increment(
     if type(current) ~= "number"
         or type(amount) ~= "number" then
 
-        return false
+        return false,
+            "Values must be numbers"
     end
 
     return self:Set(
@@ -820,13 +1209,30 @@ function Config:Increment(
 end
 
 
--- Change Listeners
+function Config:Decrement(
+    path,
+    amount
+)
+
+    amount =
+        amount or 1
+
+    return self:Increment(
+        path,
+        -amount
+    )
+end
+
+
+
+-- Listeners
 
 
 function Config:OnChanged(
     path,
     callback
 )
+
     if type(path) ~= "string"
         or type(callback) ~= "function" then
 
@@ -837,8 +1243,11 @@ function Config:OnChanged(
         self.Changed[path]
         or {}
 
+    local listeners =
+        self.Changed[path]
+
     table.insert(
-        self.Changed[path],
+        listeners,
         callback
     )
 
@@ -852,24 +1261,18 @@ function Config:OnChanged(
 
         removed = true
 
-        local listeners =
-            self.Changed[path]
+        for index =
+            #listeners,
+            1,
+            -1 do
 
-        if not listeners then
-            return
-        end
-
-        for index, listener
-            in ipairs(listeners) do
-
-            if listener == callback then
+            if listeners[index] ==
+                callback then
 
                 table.remove(
                     listeners,
                     index
                 )
-
-                break
             end
         end
 
@@ -880,85 +1283,49 @@ function Config:OnChanged(
 end
 
 
--- Global Change Listener
+function Config:OnAnyChanged(
+    callback
+)
 
-
-function Config:OnAnyChanged(callback)
     return self:OnChanged(
         "*",
         callback
     )
 end
 
--- Override event firing for global listeners
-local OriginalFireChanged =
-    Config._FireChanged
-
-function Config:_FireChanged(
-    path,
-    newValue,
-    oldValue
-)
-    OriginalFireChanged(
-        self,
-        path,
-        newValue,
-        oldValue
-    )
-
-    local listeners =
-        self.Changed["*"]
-
-    if not listeners then
-        return
-    end
-
-    for _, callback in ipairs(listeners) do
-
-        if type(callback) == "function" then
-
-            task.spawn(
-                function()
-
-                    pcall(
-                        callback,
-                        newValue,
-                        oldValue,
-                        path
-                    )
-
-                end
-            )
-
-        end
-    end
-end
 
 
 -- Lock
 
 
 function Config:Lock()
+
     self.Locked = true
 
     return self
 end
 
+
 function Config:Unlock()
+
     self.Locked = false
 
     return self
 end
 
+
 function Config:IsLocked()
+
     return self.Locked == true
 end
+
 
 
 -- Snapshot
 
 
 function Config:Snapshot()
+
     self:_EnsureInitialized()
 
     return DeepCopy(
@@ -966,28 +1333,54 @@ function Config:Snapshot()
     )
 end
 
-function Config:Restore(snapshot)
+
+function Config:Restore(
+    snapshot
+)
+
     self:_EnsureInitialized()
 
     if self.Locked then
-        return false, "Config is locked"
+        return false,
+            "Config is locked"
     end
 
     if type(snapshot) ~= "table" then
-        return false, "Invalid snapshot"
+
+        return false,
+            "Invalid snapshot"
     end
+
+    local oldValues =
+        DeepCopy(
+            self.Values
+        )
 
     self.Values =
         DeepCopy(snapshot)
 
+    self:_RecordHistory(
+        "*",
+        self.Values,
+        oldValues
+    )
+
+    self:_FireChanged(
+        "*",
+        self.Values,
+        oldValues
+    )
+
     return true
 end
+
 
 
 -- Import / Export
 
 
 function Config:Export()
+
     self:_EnsureInitialized()
 
     return DeepCopy(
@@ -995,40 +1388,52 @@ function Config:Export()
     )
 end
 
-function Config:Import(values, merge)
+
+function Config:Import(
+    values,
+    merge
+)
+
     self:_EnsureInitialized()
 
     if self.Locked then
-        return false, "Config is locked"
+        return false,
+            "Config is locked"
     end
 
     if type(values) ~= "table" then
-        return false, "Values must be a table"
+
+        return false,
+            "Values must be a table"
     end
 
     if merge then
 
-        self.Values =
+        local merged =
             DeepMerge(
                 self.Values,
                 values
             )
 
-    else
-
-        self.Values =
-            DeepCopy(values)
-
+        return self:Restore(
+            merged
+        )
     end
 
-    return true
+    return self:Restore(
+        values
+    )
 end
+
 
 
 -- Compare
 
 
-function Config:IsDefault(path)
+function Config:IsDefault(
+    path
+)
+
     local current =
         self:GetRaw(path)
 
@@ -1041,16 +1446,19 @@ function Config:IsDefault(path)
     )
 end
 
+
 function Config:Diff()
+
     self:_EnsureInitialized()
 
     local differences = {}
 
-    local function compare(
+    local function Compare(
         current,
         defaults,
         prefix
     )
+
         if type(defaults) ~= "table" then
 
             if not ValuesEqual(
@@ -1065,32 +1473,38 @@ function Config:Diff()
                     Default =
                         DeepCopy(defaults),
                 }
-
             end
 
             return
         end
 
+
         for key, defaultValue
             in pairs(defaults) do
 
-            local currentValue =
-                current
-                and current[key]
+            local currentValue
+
+            if type(current) == "table" then
+                currentValue =
+                    current[key]
+            end
 
             local path
 
             if prefix == "" then
+
                 path =
                     tostring(key)
+
             else
+
                 path =
                     prefix
                     .. "."
                     .. tostring(key)
             end
 
-            compare(
+            Compare(
                 currentValue,
                 defaultValue,
                 path
@@ -1098,7 +1512,8 @@ function Config:Diff()
         end
     end
 
-    compare(
+
+    Compare(
         self.Values,
         self.Defaults,
         ""
@@ -1108,13 +1523,48 @@ function Config:Diff()
 end
 
 
+
 -- Validation
 
 
 function Config:Validate()
+
     self:_EnsureInitialized()
 
     local errors = {}
+
+
+    -- Schema validation
+
+    for path in pairs(
+        self.Schema
+    ) do
+
+        local value =
+            self:GetRaw(path)
+
+        if value ~= nil then
+
+            local valid, errorMessage =
+                self:_ValidateValue(
+                    path,
+                    value
+                )
+
+            if not valid then
+
+                table.insert(
+                    errors,
+                    path
+                        .. ": "
+                        .. tostring(
+                            errorMessage
+                        )
+                )
+            end
+        end
+    end
+
 
     -- ESP
 
@@ -1132,6 +1582,7 @@ function Config:Validate()
         )
     end
 
+
     local refreshRate =
         self:Get(
             "ESP.RefreshRate"
@@ -1146,6 +1597,7 @@ function Config:Validate()
         )
     end
 
+
     local boxStyle =
         self:Get(
             "ESP.BoxStyle"
@@ -1158,6 +1610,7 @@ function Config:Validate()
             "ESP.BoxStyle must be a string"
         )
     end
+
 
     -- Movement
 
@@ -1175,6 +1628,7 @@ function Config:Validate()
         )
     end
 
+
     local jumpPower =
         self:Get(
             "Movement.JumpPower"
@@ -1189,6 +1643,7 @@ function Config:Validate()
         )
     end
 
+
     local jumpHeight =
         self:Get(
             "Movement.JumpHeight"
@@ -1202,6 +1657,22 @@ function Config:Validate()
             "Movement.JumpHeight must be >= 0"
         )
     end
+
+
+    local hipHeight =
+        self:Get(
+            "Movement.HipHeight"
+        )
+
+    if type(hipHeight) ~= "number"
+        or hipHeight < 0 then
+
+        table.insert(
+            errors,
+            "Movement.HipHeight must be >= 0"
+        )
+    end
+
 
     -- Teleports
 
@@ -1218,6 +1689,7 @@ function Config:Validate()
             "Teleports.OffsetDistance must be >= 0"
         )
     end
+
 
     -- FOV
 
@@ -1236,6 +1708,7 @@ function Config:Validate()
         )
     end
 
+
     -- Update rate
 
     local updateRate =
@@ -1252,82 +1725,36 @@ function Config:Validate()
         )
     end
 
+
     return #errors == 0,
         errors
 end
+
 
 
 -- History
 
 
 function Config:GetHistory()
+
     return DeepCopy(
         self.History
     )
 end
 
+
 function Config:ClearHistory()
+
     self.History = {}
 
     return self
 end
 
 
--- Clone
+function Config:SetMaxHistory(
+    amount
+)
 
-
-function Config:Clone()
-    local clone =
-        setmetatable(
-            {
-                Name = self.Name,
-
-                Version = self.Version,
-
-                Initialized = self.Initialized,
-
-                Locked = false,
-
-                Values =
-                    DeepCopy(
-                        self.Values
-                    ),
-
-                Defaults =
-                    DeepCopy(
-                        self.Defaults
-                    ),
-
-                Changed = {},
-
-                History = {},
-
-                MaxHistory =
-                    self.MaxHistory,
-            },
-            Config
-        )
-
-    return clone
-end
-
-
--- Get Everything
-
-
-function Config:GetAll()
-    self:_EnsureInitialized()
-
-    return DeepCopy(
-        self.Values
-    )
-end
-
-
--- Set Max History
-
-
-function Config:SetMaxHistory(amount)
     if type(amount) ~= "number"
         or amount < 0 then
 
@@ -1350,18 +1777,149 @@ function Config:SetMaxHistory(amount)
 end
 
 
+
+-- Metadata
+
+
+function Config:SetMetadata(
+    key,
+    value
+)
+
+    if type(key) ~= "string"
+        or key == "" then
+
+        return false
+    end
+
+    self.Metadata[key] =
+        DeepCopy(value)
+
+    return true
+end
+
+
+function Config:GetMetadata(
+    key,
+    default
+)
+
+    local value =
+        self.Metadata[key]
+
+    if value == nil then
+        return default
+    end
+
+    return DeepCopy(value)
+end
+
+
+function Config:GetInfo()
+
+    return {
+        Name = self.Name,
+        Version = self.Version,
+
+        Initialized =
+            self.Initialized,
+
+        Locked =
+            self.Locked,
+
+        MaxHistory =
+            self.MaxHistory,
+    }
+end
+
+
+
+-- Clone
+
+
+function Config:Clone()
+
+    local clone =
+        setmetatable(
+            {
+                Name =
+                    self.Name,
+
+                Version =
+                    self.Version,
+
+                Initialized =
+                    self.Initialized,
+
+                Locked = false,
+
+                Values =
+                    DeepCopy(
+                        self.Values
+                    ),
+
+                Defaults =
+                    DeepCopy(
+                        self.Defaults
+                    ),
+
+                Changed = {},
+
+                History = {},
+
+                Schema =
+                    DeepCopy(
+                        self.Schema
+                    ),
+
+                Metadata =
+                    DeepCopy(
+                        self.Metadata
+                    ),
+
+                MaxHistory =
+                    self.MaxHistory,
+            },
+            Config
+        )
+
+    return clone
+end
+
+
+
+-- Get Everything
+
+
+function Config:GetAll()
+
+    self:_EnsureInitialized()
+
+    return DeepCopy(
+        self.Values
+    )
+end
+
+
+
 -- Destroy
 
 
 function Config:Destroy()
+
     self.Values = {}
 
     self.Changed = {}
 
     self.History = {}
 
+    self.Schema = {}
+
+    self.Metadata = {}
+
     self.Initialized = false
     self.Locked = false
 end
+
 
 return Config
