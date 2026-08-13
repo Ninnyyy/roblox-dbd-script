@@ -151,7 +151,7 @@ local DEFAULTS = {
 
     Parent = nil,
 
-    TitleText = "LUA TEST",
+    TitleText = "Singularity-Ninny.top",
 
     SubtitleText = "FEATURE CONTROL",
 
@@ -309,6 +309,12 @@ function Window.new(options)
     self.FeatureRecords = {}
 
     self.SearchQuery = ""
+
+    self.ConfigState = {}
+    self.ConfigKey = options.ConfigKey or "LuaTestConfig"
+    self.Profiles = options.Profiles
+    self.Debug = options.Debug
+    self.Commands = options.Commands
 
     self._dragging = false
 
@@ -2096,6 +2102,36 @@ end
 
 
 
+-- TAB RESET
+
+
+function Window:ClearTabs()
+    self.Tabs = {}
+    self.TabOrder = {}
+    self.Sections = {}
+    self.Controls = {}
+    self.FeatureRecords = {}
+
+    if self.TabList then
+        for _, child in ipairs(self.TabList:GetChildren()) do
+            if child ~= self.TabLayout then
+                pcall(function()
+                    child:Destroy()
+                end)
+            end
+        end
+    end
+
+    if self.PageContainer then
+        for _, child in ipairs(self.PageContainer:GetChildren()) do
+            pcall(function()
+                child:Destroy()
+            end)
+        end
+    end
+end
+
+
 -- TAB CREATION
 
 
@@ -2977,6 +3013,12 @@ function Window:AddToggle(
         record.Enabled =
             enabled
 
+        record.Value =
+            enabled
+
+        self.ConfigState[name] =
+            enabled
+
         safeCall(
             options.Callback,
             enabled
@@ -3004,6 +3046,8 @@ function Window:AddToggle(
             }
         )
 
+    record.Value = enabled
+    self.ConfigState[name] = enabled
 
     self:_track(
         toggle.MouseButton1Click:Connect(
@@ -3607,6 +3651,13 @@ function Window:AddSlider(
         valueLabel.Text =
             tostring(value)
 
+        self.ConfigState[name] =
+            value
+
+        if record then
+            record.Value = value
+        end
+
         safeCall(
             options.Callback,
             value
@@ -3996,7 +4047,14 @@ function Window:AddDropdown(
                             selected
                         )
 
-                    safeCall(
+self.ConfigState[name] =
+                selected
+
+            if record then
+                record.Value = selected
+            end
+
+            safeCall(
                         options.Callback,
                         selected
                     )
@@ -4077,6 +4135,13 @@ function Window:AddDropdown(
                     selected
                 )
 
+            self.ConfigState[name] =
+                selected
+
+            if record then
+                record.Value = selected
+            end
+
             safeCall(
                 options.Callback,
                 selected
@@ -4145,9 +4210,30 @@ function Window:_resolveFeatureKey(featureName)
         ["health bars"] = "ESP",
         ["distance labels"] = "ESP",
         ["name labels"] = "ESP",
-        ["fog controls"] = "Visuals",
-        ["shadow controls"] = "Visuals",
+        ["player esp"] = "ESP",
+        ["targeting"] = "Targeting",
+        ["combat"] = "Combat",
+        ["auto attack"] = "Combat",
+        ["aimbot"] = "Combat",
+        ["auto heal"] = "GameFeatures",
+        ["speed"] = "GameFeatures",
+        ["jump"] = "GameFeatures",
+        ["gravity"] = "GameFeatures",
+        ["no clip"] = "GameFeatures",
+        ["flight"] = "GameFeatures",
         ["fullbright"] = "Visuals",
+        ["fog"] = "Visuals",
+        ["shadows"] = "Visuals",
+        ["ambient"] = "Visuals",
+        ["field of view"] = "Camera",
+        ["free cam"] = "Camera",
+        ["spectate"] = "Camera",
+        ["third person"] = "Camera",
+        ["fov"] = "Camera",
+        ["fov controls"] = "Camera",
+        ["camera distance"] = "Camera",
+        ["camera angle"] = "Camera",
+        ["camera smoothness"] = "Camera",
         ["generator assistance"] = "GameFeatures",
         ["healing assistance"] = "GameFeatures",
         ["objective automation"] = "GameFeatures",
@@ -4169,17 +4255,10 @@ function Window:_resolveFeatureKey(featureName)
         ["launch / physics"] = "Movement",
         ["custom coordinates"] = "Movement",
         ["position reset"] = "Movement",
-        ["third person"] = "Camera",
-        ["fov controls"] = "Camera",
-        ["camera distance"] = "Camera",
-        ["camera angle"] = "Camera",
-        ["camera smoothness"] = "Camera",
-        ["fog"] = "Visuals",
+        ["fog controls"] = "Visuals",
+        ["shadow controls"] = "Visuals",
         ["lighting"] = "Visuals",
-        ["shadows"] = "Visuals",
-        ["ambient"] = "Visuals",
         ["visibility testing"] = "Visuals",
-        ["field of view"] = "Camera",
         ["debug modes"] = "GameFeatures",
         ["physics testing"] = "GameFeatures",
         ["map exploration"] = "GameFeatures",
@@ -4211,22 +4290,56 @@ function Window:_applyFeatureToggle(featureName, enabled)
         return
     end
 
+    local key = string.lower(tostring(featureName or ""))
+
     if self.FeatureManager and type(self.FeatureManager.Get) == "function" then
         local module = self.FeatureManager:Get(mappedFeature)
 
-        if module and type(module.SetFreeCam) == "function" and string.lower(tostring(featureName)) == "free camera" then
-            module:SetFreeCam(enabled)
-            return
-        end
+        if module then
+            if key == "free cam" and type(module.SetFreeCam) == "function" then
+                module:SetFreeCam(enabled)
+                return
+            end
 
-        if module and type(module.SetSpectate) == "function" and string.lower(tostring(featureName)) == "third person" then
-            module:SetSpectate(enabled)
-            return
-        end
+            if key == "spectate" and type(module.SetSpectate) == "function" then
+                module:SetSpectate(enabled)
+                return
+            end
 
-        if module and type(module.SetEnabled) == "function" then
-            module:SetEnabled(enabled)
-            return
+            if key == "no clip" and type(module.SetNoClip) == "function" then
+                module:SetNoClip(enabled)
+                return
+            end
+
+            if key == "flight" and type(module.SetFlight) == "function" then
+                module:SetFlight(enabled)
+                return
+            end
+
+            if key == "fullbright" and type(module.SetEnabled) == "function" then
+                module:SetEnabled(enabled)
+                return
+            end
+
+            if key == "speed" and type(module.SetSpeedEnabled) == "function" then
+                module:SetSpeedEnabled(enabled)
+                return
+            end
+
+            if key == "jump" and type(module.SetJumpEnabled) == "function" then
+                module:SetJumpEnabled(enabled)
+                return
+            end
+
+            if key == "gravity" and type(module.SetGravityEnabled) == "function" then
+                module:SetGravityEnabled(enabled)
+                return
+            end
+
+            if type(module.SetEnabled) == "function" then
+                module:SetEnabled(enabled)
+                return
+            end
         end
     end
 
@@ -4244,34 +4357,46 @@ function Window:_applyFeatureSlider(featureName, settingName, value)
         return
     end
 
+    local key = string.lower(tostring(featureName or ""))
+
     if self.FeatureManager and type(self.FeatureManager.Get) == "function" then
         local module = self.FeatureManager:Get(mappedFeature)
 
-        if module and type(module.SetSetting) == "function" then
-            local name = settingName or "Strength"
-            pcall(function()
-                if string.lower(tostring(featureName)) == "field of view" or string.lower(tostring(featureName)) == "camera angle" or string.lower(tostring(featureName)) == "camera distance" or string.lower(tostring(featureName)) == "camera smoothness" then
-                    if name == "Strength" then
-                        if string.lower(tostring(featureName)) == "field of view" then
-                            module:SetSetting("FOV", value)
-                            return
-                        end
+        if module then
+            if key == "speed" and type(module.SetWalkSpeed) == "function" then
+                module:SetWalkSpeed(value)
+                return
+            end
 
-                        if string.lower(tostring(featureName)) == "camera distance" then
-                            module:SetSetting("Distance", value)
-                            return
-                        end
+            if key == "jump" and type(module.SetJumpPower) == "function" then
+                module:SetJumpPower(value)
+                return
+            end
 
-                        if string.lower(tostring(featureName)) == "camera smoothness" then
-                            module:SetSetting("Smoothness", value)
-                            return
-                        end
-                    end
-                end
+            if key == "gravity" and type(module.SetGravity) == "function" then
+                module:SetGravity(value)
+                return
+            end
 
-                module:SetSetting(name, value)
-            end)
-            return
+            if key == "field of view" and type(module.SetSetting) == "function" then
+                module:SetSetting("FOV", value)
+                return
+            end
+
+            if key == "camera distance" and type(module.SetSetting) == "function" then
+                module:SetSetting("Distance", value)
+                return
+            end
+
+            if key == "camera smoothness" and type(module.SetSetting) == "function" then
+                module:SetSetting("Smoothness", value)
+                return
+            end
+
+            if type(module.SetSetting) == "function" then
+                module:SetSetting(settingName or "Strength", value)
+                return
+            end
         end
     end
 
@@ -4848,6 +4973,47 @@ function Window:SetTitle(
 end
 
 
+function Window:ApplyPremiumStyle()
+    if self.Header then
+        self.Header.BackgroundColor3 = self:_accent()
+        self.Header.BorderSizePixel = 0
+    end
+
+    if self.Main then
+        self.Main.BackgroundColor3 = self:_background()
+    end
+
+    if self.Navigation then
+        self.Navigation.BackgroundColor3 = self:_secondary()
+    end
+
+    if self.Content then
+        self.Content.BackgroundColor3 = self:_background()
+    end
+
+    if self.Footer then
+        self.Footer.BackgroundColor3 = self:_secondary()
+    end
+
+    if self.Title then
+        self.Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+        self.Title.Font = Enum.Font.GothamBold
+    end
+
+    if self.Subtitle then
+        self.Subtitle.TextColor3 = self:_muted()
+        self.Subtitle.Font = Enum.Font.GothamSemibold
+    end
+
+    if self.Status then
+        self.Status.TextColor3 = Color3.fromRGB(214, 245, 255)
+        self.Status.Font = Enum.Font.GothamBold
+    end
+
+    return true
+end
+
+
 
 
 -- TAB ACCESS
@@ -5184,6 +5350,148 @@ function Window:BuildDefaultFeatureLayout(
 end
 
 
+function Window:ApplyTheme(themeName)
+    if self.Themes and type(self.Themes.SetTheme) == "function" then
+        local success = pcall(function()
+            self.Themes:SetTheme(themeName)
+        end)
+
+        if success then
+            self:RefreshTheme()
+            return true
+        end
+    end
+
+    return false
+end
+
+
+function Window:SaveConfig()
+    local payload = {
+        Theme = self.Themes and self.Themes:GetCurrentTheme() or "Midnight",
+        CenterOnOpen = self.Options.CenterOnOpen == true,
+        ToggleKey = tostring(self.Options.ToggleKey or "RightShift"),
+        Settings = self.ConfigState,
+    }
+
+    local serialized = tostring(payload)
+
+    if game:GetService and game:GetService("HttpService") then
+        local HttpService = game:GetService("HttpService")
+        if HttpService.JSONEncode then
+            serialized = HttpService:JSONEncode(payload)
+        end
+    end
+
+    self.LastSavedConfig = serialized
+
+    if self.Profiles and type(self.Profiles.Save) == "function" then
+        pcall(function()
+            self.Profiles:Save(self.ConfigKey, payload)
+        end)
+    end
+
+    if self.ScreenGui then
+        local value = self.ScreenGui:FindFirstChild(self.ConfigKey)
+        if not value then
+            value = Instance.new("StringValue")
+            value.Name = self.ConfigKey
+            value.Parent = self.ScreenGui
+        end
+
+        value.Value = serialized
+    end
+
+    if self.Debug and type(self.Debug.Info) == "function" then
+        pcall(function()
+            self.Debug:Info("Saved UI config")
+        end)
+    end
+
+    if self.Status then
+        self.Status.Text = "CONFIG SAVED"
+    end
+
+    return true
+end
+
+
+function Window:LoadConfig()
+    local data = self.LastSavedConfig
+
+    if self.Profiles and type(self.Profiles.Load) == "function" then
+        local success, profileData = pcall(function()
+            return self.Profiles:Load(self.ConfigKey, nil)
+        end)
+
+        if success and type(profileData) == "table" then
+            data = profileData
+        end
+    end
+
+    if self.ScreenGui then
+        local value = self.ScreenGui:FindFirstChild(self.ConfigKey)
+        if value and value.Value ~= nil then
+            local raw = value.Value
+            if type(raw) == "string" then
+                if game:GetService and game:GetService("HttpService") then
+                    local HttpService = game:GetService("HttpService")
+                    if HttpService.JSONDecode then
+                        local ok, decoded = pcall(function()
+                            return HttpService:JSONDecode(raw)
+                        end)
+                        if ok and type(decoded) == "table" then
+                            data = decoded
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if type(data) == "string" then
+        local ok, decoded = pcall(function()
+            if game:GetService and game:GetService("HttpService") then
+                local HttpService = game:GetService("HttpService")
+                if HttpService.JSONDecode then
+                    return HttpService:JSONDecode(data)
+                end
+            end
+
+            return nil
+        end)
+
+        if ok and type(decoded) == "table" then
+            data = decoded
+        end
+    end
+
+    if type(data) == "table" then
+        if data.Theme and self.Themes and type(self.Themes.SetTheme) == "function" then
+            pcall(function()
+                self.Themes:SetTheme(data.Theme)
+            end)
+        end
+
+        if type(data.Settings) == "table" then
+            self.ConfigState = data.Settings
+        end
+    end
+
+    if self.Debug and type(self.Debug.Info) == "function" then
+        pcall(function()
+            self.Debug:Info("Loaded UI config")
+        end)
+    end
+
+    if self.Status then
+        self.Status.Text = "CONFIG LOADED"
+    end
+
+    return true
+end
+
+
 function Window:BuildAdvancedFeatureLayout(
     features
 )
@@ -5192,92 +5500,95 @@ function Window:BuildAdvancedFeatureLayout(
         features
         or {}
 
+    self:ClearTabs()
+
+    self.Options.CenterOnOpen = true
+    self.Options.StartOpen = true
+    self.Options.ToggleKey = Enum.KeyCode.RightShift
+
+    if self.Themes and type(self.Themes.SetTheme) == "function" then
+        pcall(function()
+            self.Themes:SetTheme("Purple")
+        end)
+    end
+
+    self:SetTitle(
+        "Singularity-Ninny.top",
+        "FEATURE CONTROL"
+    )
+
+    self:ApplyPremiumStyle()
+    self:SetStatus("PREMIUM MODE • ACTIVE")
+
+    if self.HotkeyLabel then
+        self.HotkeyLabel.Text = "RIGHT SHIFT  •  TOGGLE"
+    end
+
+    if self.Commands and type(self.Commands.Register) == "function" then
+        pcall(function()
+            self.Commands:Register("togglemenu", function()
+                self:Toggle()
+            end, "Toggle the premium menu")
+
+            self.Commands:Register("saveconfig", function()
+                self:SaveConfig()
+            end, "Save current UI config")
+
+            self.Commands:Register("loadconfig", function()
+                self:LoadConfig()
+            end, "Load saved UI config")
+
+            self.Commands:Register("theme", function(themeName)
+                if themeName and themeName ~= "" then
+                    self:ApplyTheme(themeName)
+                end
+            end, "Change the active UI theme")
+        end)
+    end
+
     local tabs = {
-        "Visuals",
-        "Survivor",
-        "Killer",
+        "Player",
         "Movement",
-        "Camera",
-        "Environment",
-        "Developer",
+        "Visuals",
         "Misc",
     }
 
     local registry = {
-        Visuals = {
-            "Player ESP",
-            "World Objects",
-            "Health Bars",
-            "Distance Labels",
-            "Name Labels",
-            "Fog Controls",
-            "Shadow Controls",
-            "Fullbright",
-        },
-
-        Survivor = {
-            "Generator Assistance",
-            "Healing Assistance",
-            "Objective Automation",
-            "Exit Assistance",
-            "Teleportation",
-            "Skill-check Assist",
-            "Perfect Skill-chance",
-            "Anti-fail",
-        },
-
-        Killer = {
-            "Combat Assistance",
-            "Target Detection",
-            "Auto Carry",
-            "Auto Hook",
-            "Hitbox Testing",
-            "Lunge Controls",
-            "Pallet Destruction",
-            "Survivor Teleportation",
+        Player = {
+            { Name = "Player ESP", Key = "Player ESP", Type = "Toggle" },
+            { Name = "Targeting", Key = "Targeting", Type = "Toggle" },
+            { Name = "Auto Attack", Key = "Combat", Type = "Toggle" },
+            { Name = "Aimbot", Key = "Combat", Type = "Toggle" },
+            { Name = "Auto Heal", Key = "Auto Heal", Type = "Toggle" },
+            { Name = "Spectate", Key = "Spectate", Type = "Toggle" },
+            { Name = "Sensitivity", Key = "Sensitivity", Type = "Slider", Min = 0, Max = 100, Default = 55 },
         },
 
         Movement = {
-            "Teleport",
-            "Free Camera",
-            "Launch / Physics",
-            "Custom Coordinates",
-            "Position Reset",
+            { Name = "Speed", Key = "Speed", Type = "Slider", Min = 0, Max = 200, Default = 90 },
+            { Name = "Jump", Key = "Jump", Type = "Slider", Min = 0, Max = 200, Default = 80 },
+            { Name = "No Clip", Key = "No Clip", Type = "Toggle" },
+            { Name = "Flight", Key = "Flight", Type = "Toggle" },
+            { Name = "Gravity", Key = "Gravity", Type = "Slider", Min = 0, Max = 200, Default = 100 },
+            { Name = "Teleport", Key = "Teleport", Type = "Toggle" },
         },
 
-        Camera = {
-            "Third Person",
-            "FOV Controls",
-            "Camera Distance",
-            "Camera Angle",
-            "Camera Smoothness",
-        },
-
-        Environment = {
-            "Fog",
-            "Lighting",
-            "Shadows",
-            "Ambient",
-            "Fullbright",
-            "Visibility Testing",
-            "Field of View",
-        },
-
-        Developer = {
-            "Debug Modes",
-            "Physics Testing",
-            "Map Exploration",
-            "Objective Testing",
-            "Endgame Testing",
-            "Diagnostics",
+        Visuals = {
+            { Name = "Fullbright", Key = "Fullbright", Type = "Toggle" },
+            { Name = "Fog Control", Key = "Fog", Type = "Toggle" },
+            { Name = "Shadow Control", Key = "Shadows", Type = "Toggle" },
+            { Name = "Ambient", Key = "Ambient", Type = "Toggle" },
+            { Name = "Field of View", Key = "Field of View", Type = "Slider", Min = 0, Max = 120, Default = 70 },
+            { Name = "Theme", Key = "Theme", Type = "Dropdown", Options = { "Midnight", "Dark", "Purple", "Blue", "Red", "Green", "Cyan", "Orange" } },
         },
 
         Misc = {
-            "Utility",
-            "Settings",
-            "Notifications",
-            "Keybinds",
-            "Status",
+            { Name = "Center Window", Key = "CenterWindow", Type = "Toggle" },
+            { Name = "Free Cam", Key = "Free Cam", Type = "Toggle" },
+            { Name = "Save Config", Key = "SaveConfig", Type = "Button" },
+            { Name = "Load Config", Key = "LoadConfig", Type = "Button" },
+            { Name = "Reset Theme", Key = "ResetTheme", Type = "Button" },
+            { Name = "Status", Key = "Status", Type = "Label" },
         },
     }
 
@@ -5297,84 +5608,113 @@ function Window:BuildAdvancedFeatureLayout(
         local panel = registry[tabName] or {}
         local container = {}
 
-        for index, featureName in ipairs(panel) do
+        for index, item in ipairs(panel) do
             local section = self:AddSection(
                 tabName,
-                featureName,
+                item.Name,
                 {
-                    Height = 52,
+                    Height = 82,
                     Order = index,
+                    Background = Color3.fromRGB(20, 22, 28),
+                    Border = Color3.fromRGB(45, 48, 56),
                 }
             )
 
-            container[featureName] = section
+            container[item.Name] = section
 
-            local mappedFeature = self:_resolveFeatureKey(featureName)
-
-            self:AddToggle(
-                tabName,
-                section,
-                featureName,
-                {
-                    Description = "Advanced module toggle",
-                    Default = false,
-                    Callback = function(enabled)
-                        self:_applyFeatureToggle(featureName, enabled)
-                    end,
-                }
-            )
-
-            self:AddSlider(
-                tabName,
-                section,
-                featureName .. " Strength",
-                {
-                    Min = 0,
-                    Max = 100,
-                    Default = 50,
-                    Description = "Live tuning value",
-                    Callback = function(value)
-                        self:_applyFeatureSlider(featureName, "Strength", value)
-                    end,
-                }
-            )
+            if item.Type == "Toggle" then
+                self:AddToggle(
+                    tabName,
+                    section,
+                    item.Name,
+                    {
+                        Description = "Feature toggle",
+                        Default = false,
+                        Callback = function(enabled)
+                            self:_applyFeatureToggle(item.Key, enabled)
+                        end,
+                    }
+                )
+            elseif item.Type == "Slider" then
+                self:AddSlider(
+                    tabName,
+                    section,
+                    item.Name,
+                    {
+                        Min = item.Min or 0,
+                        Max = item.Max or 100,
+                        Default = item.Default or 50,
+                        Description = "Value control",
+                        Callback = function(value)
+                            self:_applyFeatureSlider(item.Key, item.Name, value)
+                        end,
+                    }
+                )
+            elseif item.Type == "Dropdown" then
+                self:AddDropdown(
+                    tabName,
+                    section,
+                    item.Name,
+                    {
+                        Values = item.Options or { "Midnight" },
+                        Default = item.Options and item.Options[1] or "Midnight",
+                        Description = "Theme selector",
+                        Callback = function(value)
+                            if item.Key == "Theme" then
+                                self:ApplyTheme(value)
+                            end
+                        end,
+                    }
+                )
+            elseif item.Type == "Button" then
+                self:AddButton(
+                    tabName,
+                    section,
+                    item.Name,
+                    {
+                        Description = "Quick action",
+                        Background = Color3.fromRGB(36, 40, 48),
+                        Callback = function()
+                            if item.Name == "Save Config" then
+                                self:SaveConfig()
+                            elseif item.Name == "Load Config" then
+                                self:LoadConfig()
+                            elseif item.Name == "Reset Theme" then
+                                if self.Themes and type(self.Themes.SetTheme) == "function" then
+                                    pcall(function()
+                                        self.Themes:SetTheme("Midnight")
+                                    end)
+                                    self:RefreshTheme()
+                                end
+                            end
+                        end,
+                    }
+                )
+            elseif item.Type == "Label" then
+                self:AddLabel(
+                    tabName,
+                    section,
+                    "Framework status: online",
+                    {
+                        Height = 18,
+                        TextSize = 10,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                    }
+                )
+                self:AddLabel(
+                    tabName,
+                    section,
+                    "UI: premium build active",
+                    {
+                        Height = 18,
+                        TextSize = 10,
+                        TextXAlignment = Enum.TextXAlignment.Left,
+                    }
+                )
+            end
         end
 
         sections[tabName] = container
-    end
-
-    local statusTab = self:GetTab("Misc")
-    if statusTab then
-        local statusSection = self:AddSection(
-            "Misc",
-            "Runtime Status",
-            {
-                Height = 80,
-                Order = 1,
-            }
-        )
-
-        self:AddLabel(
-            "Misc",
-            statusSection,
-            "Framework status: online",
-            {
-                Height = 20,
-                TextSize = 10,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }
-        )
-
-        self:AddLabel(
-            "Misc",
-            statusSection,
-            "UI: advanced feature layout active",
-            {
-                Height = 20,
-                TextSize = 10,
-                TextXAlignment = Enum.TextXAlignment.Left,
-            }
-        )
     end
 
     return sections

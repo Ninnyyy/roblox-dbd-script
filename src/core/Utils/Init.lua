@@ -24,13 +24,16 @@ local Utils = {
     Running = false,
 
     BaseURL =
-        "https://raw.githubusercontent.com/Ninnyyy/Lua-Test-Script/main/",
+        "https://raw.githubusercontent.com/Ninnyyy/roblox-dbd-script/main/",
 
     Modules = {},
 
     Helpers = nil,
     Math = nil,
     Players = nil,
+    Profiles = nil,
+    Debug = nil,
+    Commands = nil,
 
     Errors = {},
 }
@@ -419,6 +422,21 @@ local function LoadModules()
             "src/core/Utils/Players.lua"
         )
 
+    Utils.Profiles =
+        LoadRemote(
+            "src/core/Utils/Profiles.lua"
+        )
+
+    Utils.Debug =
+        LoadRemote(
+            "src/core/Utils/Debug.lua"
+        )
+
+    Utils.Commands =
+        LoadRemote(
+            "src/core/Utils/Commands.lua"
+        )
+
     Utils.Modules = {
         Helpers =
             Utils.Helpers,
@@ -428,6 +446,15 @@ local function LoadModules()
 
         Players =
             Utils.Players,
+
+        Profiles =
+            Utils.Profiles,
+
+        Debug =
+            Utils.Debug,
+
+        Commands =
+            Utils.Commands,
     }
 end
 
@@ -453,6 +480,15 @@ local function BuildContext()
 
         Players =
             Utils.Players,
+
+        Profiles =
+            Utils.Profiles,
+
+        Debug =
+            Utils.Debug,
+
+        Commands =
+            Utils.Commands,
     }
 end
 

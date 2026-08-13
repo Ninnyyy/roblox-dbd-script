@@ -13,7 +13,7 @@
 ]]
 
 local BASE_URL =
-    "https://raw.githubusercontent.com/Ninnyyy/Lua-Test-Script/main/"
+    "https://raw.githubusercontent.com/Ninnyyy/roblox-dbd-script/main/"
 
 local INIT_PATH = "src/core/Init.lua"
 local INIT_URL = BASE_URL .. INIT_PATH

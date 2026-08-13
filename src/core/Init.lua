@@ -22,7 +22,7 @@ local Init = {
     Running = false,
 
     BaseURL =
-        "https://raw.githubusercontent.com/Ninnyyy/Lua-Test-Script/main/",
+        "https://raw.githubusercontent.com/Ninnyyy/roblox-dbd-script/main/",
 
     Modules = {},
     Core = {},
