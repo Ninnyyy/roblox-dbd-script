@@ -83,54 +83,19 @@ local executeSuccess, Core =
     pcall(loader)
 
 if not executeSuccess then
-    error(
-        "[Lua Test] Init.lua execution failed:\n"
-        .. tostring(Core)
-    )
+    local errorMsg = "[Lua Test] Init.lua execution failed:\n" .. tostring(Core)
+    print(errorMsg)
+    error(errorMsg)
 end
 
 if type(Core) ~= "table" then
-    error(
-        "[Lua Test] Init.lua did not return a table"
-    )
+    local errorMsg = "[Lua Test] Init.lua did not return a table (got " .. type(Core) .. ")"
+    print(errorMsg)
+    error(errorMsg)
 end
-
-
-
--- Validate
-
-
-if not Core.Init then
-    warn(
-        "[Lua Test] Warning: Core.Init is missing"
-    )
-end
-
-if not Core.FeatureManager then
-    warn(
-        "[Lua Test] Warning: FeatureManager is missing"
-    )
-end
-
-if not Core.ESP then
-    warn(
-        "[Lua Test] Warning: ESP is missing"
-    )
-end
-
-if not Core.Window then
-    warn(
-        "[Lua Test] Warning: Window is missing"
-    )
-end
-
-
-
--- Success
-
 
 print("[Lua Test] ===============================")
-print("[Lua Test] Bootstrap completed")
+print("[Lua Test] Bootstrap completed successfully")
 print("[Lua Test] Version:",
     Core.Init
         and Core.Init.Version
@@ -141,7 +106,23 @@ print("[Lua Test] Initialized:",
         and tostring(Core.Init.Initialized)
         or "unknown"
 )
-print("[Lua Test] ===============================")
+print("[Lua Test] Running:",
+    Core.Init
+        and tostring(Core.Init.Running)
+        or "unknown"
+)
 
+if Core.Init and #Core.Init.Errors > 0 then
+    print("[Lua Test] ===============================")
+    print("[Lua Test] ERRORS DURING BOOTSTRAP:")
+    for i, err in ipairs(Core.Init.Errors) do
+        print("[Lua Test] [" .. i .. "] " .. tostring(err.Path) .. ": " .. tostring(err.Error))
+    end
+end
+
+print("[Lua Test] ===============================")
+print("[Lua Test] ✓ Script loaded and ready")
+print("[Lua Test] Toggle menu with: RIGHT SHIFT")
+print("[Lua Test] ===============================")
 
 return Core

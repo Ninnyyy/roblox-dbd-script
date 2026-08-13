@@ -663,7 +663,14 @@ local success, errorMessage =
     end)
 
 if not success then
-    warn("[Lua Test] Framework bootstrap failed:", errorMessage)
+    print("[Lua Test] ⚠ Framework bootstrap failed:")
+    print(errorMessage)
+    table.insert(Init.Errors, {
+        Path = "src/core/Init.lua",
+        Error = "Bootstrap failed: " .. tostring(errorMessage),
+    })
+else
+    print("[Lua Test] ✓ Framework initialized successfully")
 end
 
 return Init
