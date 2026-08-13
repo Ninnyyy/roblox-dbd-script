@@ -1,3 +1,28 @@
+--[[ 
+    Lua Test
+    Window.lua
+    Advanced UI Window Framework
+
+    Keeps the existing Window API while adding:
+        - Proper minimize / restore
+        - Window show / hide lifecycle
+        - Dragging
+        - Screen clamping
+        - Window resizing
+        - Position / size APIs
+        - Centering
+        - Bring-to-front
+        - Improved search
+        - Tab / section management
+        - Popup management
+        - Runtime theme updates
+        - Accent updates
+        - Safer cleanup
+        - Control lookup
+        - Window state helpers
+        - Notifications integration
+]]
+
 local Window = {}
 Window.__index = Window
 
@@ -42,6 +67,16 @@ local DEFAULTS = {
     SearchControls = true,
 
     ClosePopupsOnOutsideClick = true,
+
+    EnableResize = true,
+    MinSize = Vector2.new(560, 380),
+    MaxSize = Vector2.new(1400, 900),
+    ResizeHandleSize = 16,
+
+    DoubleClickHeader = true,
+    DoubleClickTime = 0.25,
+
+    BringToFrontOnClick = true,
 }
 
 local function merge(defaults, overrides)
@@ -97,6 +132,13 @@ local function containsText(text, query)
     end
 
     return text:find(query, 1, true) ~= nil
+end
+
+local function getOffsetSize(udim2)
+    return Vector2.new(
+        udim2.X.Offset,
+        udim2.Y.Offset
+    )
 end
 
 function Window.new(
@@ -160,12 +202,30 @@ function Window.new(
     self._tabOrder = {}
     self._connections = {}
     self._popups = {}
+
     self._dragging = false
     self._dragStart = nil
     self._startPosition = nil
-    self._keybindListening = nil
 
+    self._resizing = false
+    self._resizeStart = nil
+    self._resizeStartSize = nil
+    self._resizeStartPosition = nil
+
+    self._keybindListening = nil
     self._searchQuery = ""
+
+    self._lastHeaderClick = 0
+    self._normalSize = self.Options.Size
+    self._normalPosition = self.Options.Position
+
+    self._lifecycleCallbacks = {
+        Created = {},
+        VisibleChanged = {},
+        Minimized = {},
+        Restored = {},
+        Destroyed = {},
+    }
 
     return self
 end
@@ -185,15 +245,21 @@ function Window:_tween(object, properties, duration)
         return nil
     end
 
-    local tween = TweenService:Create(
-        object,
-        TweenInfo.new(
-            duration or self.Options.AnimationTime,
-            Enum.EasingStyle.Quad,
-            Enum.EasingDirection.Out
-        ),
-        properties
-    )
+    local success, tween = pcall(function()
+        return TweenService:Create(
+            object,
+            TweenInfo.new(
+                duration or self.Options.AnimationTime,
+                Enum.EasingStyle.Quad,
+                Enum.EasingDirection.Out
+            ),
+            properties
+        )
+    end)
+
+    if not success then
+        return nil
+    end
 
     return tween
 end
@@ -264,6 +330,34 @@ function Window:_disconnectAll()
             self.ConnectionManager:Destroy()
         end)
     end
+end
+
+function Window:_emit(eventName, ...)
+    local callbacks = self._lifecycleCallbacks[eventName]
+
+    if not callbacks then
+        return
+    end
+
+    for _, callback in ipairs(callbacks) do
+        safeCallback(callback, ...)
+    end
+end
+
+function Window:On(eventName, callback)
+    if type(callback) ~= "function" then
+        return nil
+    end
+
+    local callbacks = self._lifecycleCallbacks[eventName]
+
+    if not callbacks then
+        return nil
+    end
+
+    table.insert(callbacks, callback)
+
+    return callback
 end
 
 function Window:_corner(object, radius)
@@ -492,12 +586,12 @@ function Window:_setupPopupManager()
                     return
                 end
 
-                local mousePosition =
-                    input.Position
+                local mousePosition = input.Position
 
                 for _, popup in ipairs(self._popups) do
                     if popup
-                        and popup.Visible then
+                        and popup.Visible
+                        and popup.Parent then
 
                         local position =
                             popup.AbsolutePosition
@@ -521,6 +615,178 @@ function Window:_setupPopupManager()
             end
         )
     )
+end
+
+function Window:_createResizeHandle()
+    if not self.Options.EnableResize then
+        return
+    end
+
+    local handle = create("TextButton", {
+        Name = "ResizeHandle",
+
+        AnchorPoint = Vector2.new(1, 1),
+
+        Position = UDim2.new(1, 0, 1, 0),
+
+        Size = UDim2.fromOffset(
+            self.Options.ResizeHandleSize,
+            self.Options.ResizeHandleSize
+        ),
+
+        BackgroundTransparency = 1,
+
+        Text = "",
+
+        AutoButtonColor = false,
+
+        ZIndex = 1000,
+
+        Parent = self.Main
+    })
+
+    self.ResizeHandle = handle
+
+    local visual = create("Frame", {
+        AnchorPoint = Vector2.new(1, 1),
+
+        Position = UDim2.new(1, -3, 1, -3),
+
+        Size = UDim2.fromOffset(8, 8),
+
+        BackgroundTransparency = 1,
+
+        Parent = handle
+    })
+
+    for i = 0, 2 do
+        local line = create("Frame", {
+            AnchorPoint = Vector2.new(1, 1),
+
+            Position = UDim2.new(
+                1,
+                -i * 3,
+                1,
+                i * 3
+            ),
+
+            Size = UDim2.fromOffset(
+                1,
+                8 - i * 2
+            ),
+
+            Rotation = -45,
+
+            BackgroundColor3 = self.Theme.MutedText,
+
+            BackgroundTransparency = 0.45,
+
+            BorderSizePixel = 0,
+
+            Parent = visual
+        })
+
+        line.Name = "ResizeLine" .. tostring(i)
+    end
+
+    self:_register(
+        "ResizeBegin",
+        handle.MouseButton1Down:Connect(function()
+            if self.Destroyed
+                or self.Minimized then
+                return
+            end
+
+            self._resizing = true
+
+            self._resizeStart =
+                UserInputService:GetMouseLocation()
+
+            self._resizeStartSize =
+                self.Main.AbsoluteSize
+
+            self._resizeStartPosition =
+                self.Main.AbsolutePosition
+        end)
+    )
+
+    self:_register(
+        "ResizeChanged",
+        UserInputService.InputChanged:Connect(function(input)
+            if not self._resizing
+                or self.Destroyed then
+                return
+            end
+
+            if input.UserInputType
+                ~= Enum.UserInputType.MouseMovement then
+                return
+            end
+
+            local current =
+                input.Position
+
+            local delta =
+                current - self._resizeStart
+
+            self:_resizeByDelta(delta)
+        end)
+    )
+
+    self:_register(
+        "ResizeEnd",
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType
+                == Enum.UserInputType.MouseButton1 then
+
+                self._resizing = false
+            end
+        end)
+    )
+end
+
+function Window:_resizeByDelta(delta)
+    if not self.Main then
+        return
+    end
+
+    local currentSize =
+        self.Main.AbsoluteSize
+
+    local targetX =
+        currentSize.X + delta.X
+
+    local targetY =
+        currentSize.Y + delta.Y
+
+    local minSize =
+        self.Options.MinSize
+
+    local maxSize =
+        self.Options.MaxSize
+
+    targetX =
+        math.clamp(
+            targetX,
+            minSize.X,
+            maxSize.X
+        )
+
+    targetY =
+        math.clamp(
+            targetY,
+            minSize.Y,
+            maxSize.Y
+        )
+
+    self.Main.Size =
+        UDim2.fromOffset(
+            targetX,
+            targetY
+        )
+
+    self._resizeStart =
+        UserInputService:GetMouseLocation()
 end
 
 function Window:Create()
@@ -572,7 +838,7 @@ function Window:Create()
 
         BorderSizePixel = 0,
 
-        ClipsDescendants = true,
+        ClipsDescendants = false,
 
         Parent = gui
     })
@@ -593,6 +859,7 @@ function Window:Create()
 
     self:_createHeader()
     self:_createBody()
+    self:_createResizeHandle()
     self:_setupPopupManager()
 
     if self.Notifications
@@ -618,18 +885,30 @@ function Window:Create()
                 if toggleKey
                     and input.KeyCode == toggleKey then
 
-                    self:SetVisible(
-                        not self.Visible
-                    )
+                    self:Toggle()
                 end
             end
         )
+    )
+
+    self:_register(
+        "WindowFocus",
+        main.InputBegan:Connect(function(input)
+            if self.Options.BringToFrontOnClick
+                and input.UserInputType
+                    == Enum.UserInputType.MouseButton1 then
+
+                self:BringToFront()
+            end
+        end)
     )
 
     self:SetVisible(
         true,
         false
     )
+
+    self:_emit("Created", self)
 
     return self
 end
@@ -769,9 +1048,15 @@ function Window:_createHeader()
         "Minimize",
         minimize.MouseButton1Click:Connect(
             function()
-                self:SetVisible(false)
+                self:Minimize()
             end
         )
+    )
+
+    self:_addHover(
+        minimize,
+        Color3.fromRGB(0, 0, 0),
+        self.Theme.Card
     )
 
     local search = create("TextBox", {
@@ -839,9 +1124,7 @@ function Window:_createHeader()
         search:GetPropertyChangedSignal(
             "Text"
         ):Connect(function()
-            self:Search(
-                search.Text
-            )
+            self:Search(search.Text)
         end)
     )
 
@@ -882,10 +1165,30 @@ function Window:_createHeader()
         header.InputBegan:Connect(
             function(input)
                 if input.UserInputType
-                    == Enum.UserInputType.MouseButton1 then
-
-                    self:_beginDrag(input)
+                    ~= Enum.UserInputType.MouseButton1 then
+                    return
                 end
+
+                local now = os.clock()
+
+                if self.Options.DoubleClickHeader
+                    and now - self._lastHeaderClick
+                        <= self.Options.DoubleClickTime then
+
+                    self._lastHeaderClick = 0
+
+                    if self.Minimized then
+                        self:Restore()
+                    else
+                        self:Minimize()
+                    end
+
+                    return
+                end
+
+                self._lastHeaderClick = now
+
+                self:_beginDrag(input)
             end
         )
     )
@@ -1153,7 +1456,10 @@ function Window:AddTab(name, icon)
             UDim2.fromOffset(12, 0),
 
         Size =
-            UDim2.fromOffset(22, self.Options.TabHeight),
+            UDim2.fromOffset(
+                22,
+                self.Options.TabHeight
+            ),
 
         BackgroundTransparency = 1,
 
@@ -2139,6 +2445,13 @@ function Window:AddSlider(
         hitbox.MouseButton1Down:Connect(
             function()
                 dragging = true
+
+                updateFromInput(
+                    {
+                        Position =
+                            UserInputService:GetMouseLocation()
+                    }
+                )
             end
         )
     )
@@ -3219,7 +3532,8 @@ function Window:AddKeybind(
             )
         end,
 
-        Button = button
+        Button = button,
+        Card = button
     }
 
     return self:_registerControl(
@@ -3290,6 +3604,14 @@ function Window:AddDivider(
     return divider
 end
 
+function Window:_updateControlVisibility(control, visible)
+    control.Visible = visible
+
+    if control.Card then
+        control.Card.Visible = visible
+    end
+end
+
 function Window:Search(query)
     query =
         tostring(
@@ -3315,17 +3637,22 @@ function Window:Search(query)
         ) do
             local sectionMatch =
                 query == ""
-            or containsText(
-                section.Title.Text,
-                query
-            )
-            or (
-                section.Description
-                and containsText(
-                    section.Description.Text,
-                    query
+                or (
+                    self.Options.SearchSections
+                    and (
+                        containsText(
+                            section.Title.Text,
+                            query
+                        )
+                        or (
+                            section.Description
+                            and containsText(
+                                section.Description.Text,
+                                query
+                            )
+                        )
+                    )
                 )
-            )
 
             local anyControlMatch =
                 false
@@ -3346,19 +3673,10 @@ function Window:Search(query)
                             query
                         )
 
-                    control.Visible =
+                    self:_updateControlVisibility(
+                        control,
                         matches
-
-                    if control.Card then
-                        control.Card.Visible =
-                            matches
-                    elseif control.Button
-                        and control.Type
-                            ~= "Button" then
-
-                        control.Button.Visible =
-                            matches
-                    end
+                    )
 
                     if matches then
                         anyControlMatch =
@@ -3369,18 +3687,15 @@ function Window:Search(query)
                 for _, control in ipairs(
                     section.Controls
                 ) do
-                    control.Visible = true
-
-                    if control.Card then
-                        control.Card.Visible =
-                            true
-                    end
+                    self:_updateControlVisibility(
+                        control,
+                        true
+                    )
                 end
             end
 
-            if query == "" then
-                sectionMatch = true
-            elseif self.Options.SearchControls
+            if query ~= ""
+                and self.Options.SearchControls
                 and anyControlMatch then
 
                 sectionMatch = true
@@ -3405,6 +3720,16 @@ function Window:Search(query)
     end
 
     return true
+end
+
+function Window:RefreshSearch()
+    return self:Search(
+        self._searchQuery
+    )
+end
+
+function Window:GetSearchQuery()
+    return self._searchQuery
 end
 
 function Window:SetTheme(theme)
@@ -3522,6 +3847,19 @@ function Window:SetTheme(theme)
             end
         end
     end
+
+    if self.ResizeHandle then
+        for _, child in ipairs(
+            self.ResizeHandle:GetDescendants()
+        ) do
+            if child:IsA("Frame")
+                and child.Name:find("ResizeLine") then
+
+                child.BackgroundColor3 =
+                    self.Theme.MutedText
+            end
+        end
+    end
 end
 
 function Window:SetAccent(color)
@@ -3607,30 +3945,50 @@ function Window:SetVisible(
     animate =
         animate ~= false
 
-    self.Visible =
+    local targetVisible =
         visible == true
 
-    if self.Visible then
-        self.Minimized = false
+    self.Visible =
+        targetVisible
 
+    if targetVisible then
         self.Main.Visible = true
+
+        if self.Minimized then
+            self:Restore(
+                animate
+            )
+
+            return
+        end
 
         if not animate
             or not self.Options.EnableAnimations then
 
             self.Main.Size =
-                self.Options.Size
+                self._normalSize
+
+            self:_emit(
+                "VisibleChanged",
+                true
+            )
 
             return
         end
 
         local originalSize =
-            self.Options.Size
+            self._normalSize
 
         self.Main.Size =
             UDim2.fromOffset(
-                originalSize.X.Offset * 0.96,
-                originalSize.Y.Offset * 0.96
+                math.max(
+                    originalSize.X.Offset * 0.96,
+                    self.Options.MinSize.X
+                ),
+                math.max(
+                    originalSize.Y.Offset * 0.96,
+                    self.Options.MinSize.Y
+                )
             )
 
         self:_play(
@@ -3647,6 +4005,11 @@ function Window:SetVisible(
             self.Main.Visible =
                 false
 
+            self:_emit(
+                "VisibleChanged",
+                false
+            )
+
             return
         end
 
@@ -3655,11 +4018,16 @@ function Window:SetVisible(
             {
                 Size =
                     UDim2.fromOffset(
-                        self.Options.Size.X.Offset
-                            * 0.96,
-
-                        self.Options.Size.Y.Offset
-                            * 0.96
+                        math.max(
+                            self._normalSize.X.Offset
+                                * 0.96,
+                            self.Options.MinSize.X
+                        ),
+                        math.max(
+                            self._normalSize.Y.Offset
+                                * 0.96,
+                            self.Options.MinSize.Y
+                        )
                     )
             }
         )
@@ -3675,14 +4043,38 @@ function Window:SetVisible(
                         false
 
                     self.Main.Size =
-                        self.Options.Size
+                        self._normalSize
                 end
             end
         )
     end
+
+    self:_emit(
+        "VisibleChanged",
+        targetVisible
+    )
+end
+
+function Window:Show(animate)
+    self:SetVisible(
+        true,
+        animate
+    )
+end
+
+function Window:Hide(animate)
+    self:SetVisible(
+        false,
+        animate
+    )
 end
 
 function Window:Toggle()
+    if self.Minimized then
+        self:Restore()
+        return
+    end
+
     self:SetVisible(
         not self.Visible
     )
@@ -3692,7 +4084,238 @@ function Window:IsVisible()
     return self.Visible
 end
 
+function Window:IsMinimized()
+    return self.Minimized
+end
+
+function Window:Minimize(animate)
+    if not self.Main
+        or self.Destroyed
+        or self.Minimized then
+        return
+    end
+
+    self._normalSize =
+        self.Main.Size
+
+    self._normalPosition =
+        self.Main.Position
+
+    self.Minimized = true
+    self.Visible = true
+
+    if self.Body then
+        self.Body.Visible = false
+    end
+
+    if self.ResizeHandle then
+        self.ResizeHandle.Visible = false
+    end
+
+    local minimizedSize =
+        UDim2.new(
+            self._normalSize.X.Scale,
+            self._normalSize.X.Offset,
+            0,
+            self.Options.HeaderHeight
+        )
+
+    if animate
+        ~= false
+        and self.Options.EnableAnimations then
+
+        self:_play(
+            self.Main,
+            {
+                Size = minimizedSize
+            }
+        )
+    else
+        self.Main.Size =
+            minimizedSize
+    end
+
+    if self.MinimizeButton then
+        self.MinimizeButton.Text = "+"
+    end
+
+    self:_emit(
+        "Minimized",
+        self
+    )
+end
+
+function Window:Restore(animate)
+    if not self.Main
+        or self.Destroyed
+        or not self.Minimized then
+        return
+    end
+
+    self.Minimized = false
+
+    if self.Body then
+        self.Body.Visible = true
+    end
+
+    if self.ResizeHandle then
+        self.ResizeHandle.Visible =
+            self.Options.EnableResize
+    end
+
+    local targetSize =
+        self._normalSize
+        or self.Options.Size
+
+    if animate
+        ~= false
+        and self.Options.EnableAnimations then
+
+        self:_play(
+            self.Main,
+            {
+                Size = targetSize
+            }
+        )
+    else
+        self.Main.Size =
+            targetSize
+    end
+
+    if self._normalPosition then
+        self.Main.Position =
+            self._normalPosition
+    end
+
+    if self.MinimizeButton then
+        self.MinimizeButton.Text = "—"
+    end
+
+    self:_emit(
+        "Restored",
+        self
+    )
+end
+
+function Window:SetPosition(position)
+    if not self.Main
+        or typeof(position) ~= "UDim2" then
+        return false
+    end
+
+    self.Main.Position = position
+
+    if not self.Minimized then
+        self._normalPosition = position
+    end
+
+    return true
+end
+
+function Window:GetPosition()
+    if not self.Main then
+        return self._normalPosition
+    end
+
+    return self.Main.Position
+end
+
+function Window:SetSize(size)
+    if not self.Main
+        or typeof(size) ~= "UDim2" then
+        return false
+    end
+
+    local offset =
+        getOffsetSize(size)
+
+    offset = Vector2.new(
+        math.clamp(
+            offset.X,
+            self.Options.MinSize.X,
+            self.Options.MaxSize.X
+        ),
+        math.clamp(
+            offset.Y,
+            self.Options.MinSize.Y,
+            self.Options.MaxSize.Y
+        )
+    )
+
+    local finalSize =
+        UDim2.fromOffset(
+            offset.X,
+            offset.Y
+        )
+
+    self.Main.Size =
+        finalSize
+
+    if not self.Minimized then
+        self._normalSize =
+            finalSize
+    end
+
+    return true
+end
+
+function Window:GetSize()
+    if not self.Main then
+        return self._normalSize
+    end
+
+    return self.Main.Size
+end
+
+function Window:Center()
+    if not self.Main then
+        return false
+    end
+
+    self.Main.Position =
+        UDim2.fromScale(
+            0.5,
+            0.5
+        )
+
+    if not self.Minimized then
+        self._normalPosition =
+            self.Main.Position
+    end
+
+    return true
+end
+
+function Window:BringToFront()
+    if not self.Gui then
+        return false
+    end
+
+    local highest = 0
+
+    for _, child in ipairs(
+        self.Gui:GetChildren()
+    ) do
+        if child:IsA("GuiObject") then
+            highest =
+                math.max(
+                    highest,
+                    child.ZIndex
+                )
+        end
+    end
+
+    self.Main.ZIndex =
+        highest + 1
+
+    return true
+end
+
 function Window:_beginDrag(input)
+    if self.Minimized then
+        return
+    end
+
     self._dragging =
         true
 
@@ -3700,6 +4323,9 @@ function Window:_beginDrag(input)
         input.Position
 
     self._startPosition =
+        self.Main.Position
+
+    self._normalPosition =
         self.Main.Position
 end
 
@@ -3775,6 +4401,9 @@ function Window:_makeDraggable(handle)
                         start.Y.Scale,
                         y
                     )
+
+                self._normalPosition =
+                    self.Main.Position
             end
         )
     )
@@ -3803,8 +4432,28 @@ function Window:GetControl(index)
     return self.Controls[index]
 end
 
+function Window:GetControlByName(name)
+    if not name then
+        return nil
+    end
+
+    for _, control in ipairs(
+        self.Controls
+    ) do
+        if control.Name == name then
+            return control
+        end
+    end
+
+    return nil
+end
+
 function Window:GetControls()
     return self.Controls
+end
+
+function Window:GetTabs()
+    return self.Tabs
 end
 
 function Window:Notify(
@@ -3850,6 +4499,9 @@ function Window:Destroy()
     self._dragging =
         false
 
+    self._resizing =
+        false
+
     self._keybindListening =
         nil
 
@@ -3881,6 +4533,11 @@ function Window:Destroy()
 
     self.CurrentTab =
         nil
+
+    self:_emit(
+        "Destroyed",
+        self
+    )
 end
 
 return Window

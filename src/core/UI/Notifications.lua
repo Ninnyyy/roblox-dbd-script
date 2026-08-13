@@ -456,14 +456,14 @@ function Notifications:Show(
 
     notification.Frame = frame
 
-    local corner = Create("UICorner", {
+    Create("UICorner", {
         CornerRadius =
             UDim.new(0, 9),
 
         Parent = frame
     })
 
-    local stroke = Create("UIStroke", {
+    Create("UIStroke", {
         Color =
             self.Options.Border,
 
