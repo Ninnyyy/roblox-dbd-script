@@ -1,26 +1,36 @@
---[[ 
+--[[
     Lua Test
     Window.lua
-    Advanced UI Window Framework
+    Version 3.0.0
 
-    Keeps the existing Window API while adding:
-        - Proper minimize / restore
-        - Window show / hide lifecycle
+    UI Window Framework
+
+    Responsibilities:
+        - Window creation / destruction
+        - Show / hide lifecycle
+        - Minimize / restore
         - Dragging
         - Screen clamping
-        - Window resizing
-        - Position / size APIs
+        - Resizing
+        - Position / size management
         - Centering
-        - Bring-to-front
-        - Improved search
-        - Tab / section management
+        - Window focus
+        - Tabs
+        - Sections
+        - Search
         - Popup management
-        - Runtime theme updates
-        - Accent updates
-        - Safer cleanup
-        - Control lookup
-        - Window state helpers
+        - Runtime themes
+        - Runtime accent changes
+        - Control registry
+        - Keybind management
         - Notifications integration
+        - Lifecycle events
+        - Safe cleanup
+
+    Compatibility:
+        - Preserves existing Window API
+        - Preserves existing control APIs
+        - Preserves existing file name
 ]]
 
 local Window = {}
@@ -29,6 +39,10 @@ Window.__index = Window
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local GuiService = game:GetService("GuiService")
+
+local WINDOW_COUNTER = 0
+local WINDOW_ZINDEX = 100
 
 local DEFAULTS = {
     Size = UDim2.fromOffset(820, 570),
@@ -118,7 +132,7 @@ local function safeCallback(callback, ...)
         end)
 
         if not success then
-            warn("[Lua Test] UI callback error:", err)
+            warn("[Lua Test] Window callback error:", err)
         end
     end)
 end
@@ -134,11 +148,43 @@ local function containsText(text, query)
     return text:find(query, 1, true) ~= nil
 end
 
-local function getOffsetSize(udim2)
-    return Vector2.new(
-        udim2.X.Offset,
-        udim2.Y.Offset
+local function clampNumber(value, minimum, maximum)
+    return math.clamp(
+        tonumber(value) or minimum,
+        minimum,
+        maximum
     )
+end
+
+local function getOffsetSize(size)
+    return Vector2.new(
+        size.X.Offset,
+        size.Y.Offset
+    )
+end
+
+local function isInputMouseButton(input)
+    return input
+        and input.UserInputType
+        == Enum.UserInputType.MouseButton1
+end
+
+local function getViewport(gui)
+    if not gui then
+        return Vector2.new(0, 0)
+    end
+
+    local size = gui.AbsoluteSize
+
+    if size.X <= 0 or size.Y <= 0 then
+        local camera = workspace.CurrentCamera
+
+        if camera then
+            return camera.ViewportSize
+        end
+    end
+
+    return size
 end
 
 function Window.new(
@@ -148,17 +194,31 @@ function Window.new(
     notifications,
     options
 )
-    assert(components, "Window requires Components")
-    assert(config, "Window requires Config")
+    assert(
+        components,
+        "Window requires Components"
+    )
+
+    assert(
+        config,
+        "Window requires Config"
+    )
+
+    WINDOW_COUNTER += 1
 
     local self = setmetatable({}, Window)
+
+    self.ID = WINDOW_COUNTER
 
     self.Components = components
     self.Config = config
     self.ConnectionManager = connections
     self.Notifications = notifications
 
-    self.Options = merge(DEFAULTS, options)
+    self.Options = merge(
+        DEFAULTS,
+        options
+    )
 
     self.Theme = {
         Background = self.Options.Background,
@@ -190,8 +250,13 @@ function Window.new(
     self.Subtitle = nil
     self.Footer = nil
 
+    self.HeaderAccent = nil
+    self.MinimizeButton = nil
+    self.ResizeHandle = nil
+
     self.Tabs = {}
     self.Controls = {}
+    self.Sections = {}
 
     self.CurrentTab = nil
 
@@ -199,23 +264,30 @@ function Window.new(
     self.Minimized = false
     self.Destroyed = false
 
+    self._created = false
+
     self._tabOrder = {}
+
     self._connections = {}
+    self._connectionNames = {}
+
     self._popups = {}
 
     self._dragging = false
-    self._dragStart = nil
-    self._startPosition = nil
+    self._dragStartMouse = nil
+    self._dragStartPosition = nil
 
     self._resizing = false
-    self._resizeStart = nil
+    self._resizeStartMouse = nil
     self._resizeStartSize = nil
     self._resizeStartPosition = nil
 
     self._keybindListening = nil
+
     self._searchQuery = ""
 
     self._lastHeaderClick = 0
+
     self._normalSize = self.Options.Size
     self._normalPosition = self.Options.Position
 
@@ -230,13 +302,17 @@ function Window.new(
     return self
 end
 
-function Window:_tween(object, properties, duration)
+function Window:_tween(
+    object,
+    properties,
+    duration
+)
     if not object then
         return nil
     end
 
     if not self.Options.EnableAnimations then
-        for property, value in pairs(properties) do
+        for property, value in pairs(properties or {}) do
             pcall(function()
                 object[property] = value
             end)
@@ -249,7 +325,8 @@ function Window:_tween(object, properties, duration)
         return TweenService:Create(
             object,
             TweenInfo.new(
-                duration or self.Options.AnimationTime,
+                duration
+                    or self.Options.AnimationTime,
                 Enum.EasingStyle.Quad,
                 Enum.EasingDirection.Out
             ),
@@ -264,7 +341,11 @@ function Window:_tween(object, properties, duration)
     return tween
 end
 
-function Window:_play(object, properties, duration)
+function Window:_play(
+    object,
+    properties,
+    duration
+)
     local tween = self:_tween(
         object,
         properties,
@@ -278,7 +359,10 @@ function Window:_play(object, properties, duration)
     return tween
 end
 
-function Window:_register(name, connection)
+function Window:_register(
+    name,
+    connection
+)
     if not connection then
         return nil
     end
@@ -288,12 +372,13 @@ function Window:_register(name, connection)
 
         local success, result = pcall(function()
             return self.ConnectionManager:Add(
-                name,
+                tostring(self.ID) .. "_" .. tostring(name),
                 connection
             )
         end)
 
         if success then
+            self._connectionNames[name] = true
             return result or connection
         end
     end
@@ -303,11 +388,15 @@ function Window:_register(name, connection)
         connection
     )
 
+    self._connectionNames[name] = true
+
     return connection
 end
 
 function Window:_disconnectAll()
-    for _, connection in ipairs(self._connections) do
+    for _, connection in ipairs(
+        self._connections
+    ) do
         if connection then
             pcall(function()
                 connection:Disconnect()
@@ -315,7 +404,13 @@ function Window:_disconnectAll()
         end
     end
 
-    table.clear(self._connections)
+    table.clear(
+        self._connections
+    )
+
+    table.clear(
+        self._connectionNames
+    )
 
     if self.ConnectionManager
         and self.ConnectionManager.Clear then
@@ -323,58 +418,82 @@ function Window:_disconnectAll()
         pcall(function()
             self.ConnectionManager:Clear()
         end)
-    elseif self.ConnectionManager
-        and self.ConnectionManager.Destroy then
-
-        pcall(function()
-            self.ConnectionManager:Destroy()
-        end)
     end
 end
 
-function Window:_emit(eventName, ...)
-    local callbacks = self._lifecycleCallbacks[eventName]
+function Window:_emit(
+    eventName,
+    ...
+)
+    local callbacks =
+        self._lifecycleCallbacks[eventName]
 
     if not callbacks then
         return
     end
 
     for _, callback in ipairs(callbacks) do
-        safeCallback(callback, ...)
+        safeCallback(
+            callback,
+            ...
+        )
     end
 end
 
-function Window:On(eventName, callback)
+function Window:On(
+    eventName,
+    callback
+)
     if type(callback) ~= "function" then
         return nil
     end
 
-    local callbacks = self._lifecycleCallbacks[eventName]
+    local callbacks =
+        self._lifecycleCallbacks[eventName]
 
     if not callbacks then
         return nil
     end
 
-    table.insert(callbacks, callback)
+    table.insert(
+        callbacks,
+        callback
+    )
 
     return callback
 end
 
-function Window:_corner(object, radius)
-    if self.Components.Corner then
-        return self.Components:Corner(
-            object,
-            radius or 6
-        )
+function Window:_corner(
+    object,
+    radius
+)
+    if self.Components
+        and self.Components.Corner then
+
+        local success, result =
+            pcall(function()
+                return self.Components:Corner(
+                    object,
+                    radius or 6
+                )
+            end)
+
+        if success then
+            return result
+        end
     end
 
-    return create("UICorner", {
-        CornerRadius = UDim.new(
-            0,
-            radius or 6
-        ),
-        Parent = object
-    })
+    return create(
+        "UICorner",
+        {
+            CornerRadius = UDim.new(
+                0,
+                radius or 6
+            ),
+
+            Parent = object,
+        }
+    )
 end
 
 function Window:_stroke(
@@ -383,78 +502,159 @@ function Window:_stroke(
     thickness,
     transparency
 )
-    if self.Components.Stroke then
-        return self.Components:Stroke(
-            object,
-            color,
-            thickness or 1,
-            transparency or 0
-        )
+    if self.Components
+        and self.Components.Stroke then
+
+        local success, result =
+            pcall(function()
+                return self.Components:Stroke(
+                    object,
+                    color,
+                    thickness or 1,
+                    transparency or 0
+                )
+            end)
+
+        if success then
+            return result
+        end
     end
 
-    return create("UIStroke", {
-        Color = color or self.Theme.Border,
-        Thickness = thickness or 1,
-        Transparency = transparency or 0,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Parent = object
-    })
+    return create(
+        "UIStroke",
+        {
+            Color =
+                color
+                or self.Theme.Border,
+
+            Thickness =
+                thickness or 1,
+
+            Transparency =
+                transparency or 0,
+
+            ApplyStrokeMode =
+                Enum.ApplyStrokeMode.Border,
+
+            Parent = object,
+        }
+    )
 end
 
-function Window:_padding(object, amount)
-    if self.Components.Padding then
-        return self.Components:Padding(
-            object,
-            amount
-        )
+function Window:_padding(
+    object,
+    amount
+)
+    if self.Components
+        and self.Components.Padding then
+
+        local success, result =
+            pcall(function()
+                return self.Components:Padding(
+                    object,
+                    amount
+                )
+            end)
+
+        if success then
+            return result
+        end
     end
 
-    return create("UIPadding", {
-        PaddingTop = UDim.new(0, amount),
-        PaddingBottom = UDim.new(0, amount),
-        PaddingLeft = UDim.new(0, amount),
-        PaddingRight = UDim.new(0, amount),
-        Parent = object
-    })
+    return create(
+        "UIPadding",
+        {
+            PaddingTop =
+                UDim.new(0, amount),
+
+            PaddingBottom =
+                UDim.new(0, amount),
+
+            PaddingLeft =
+                UDim.new(0, amount),
+
+            PaddingRight =
+                UDim.new(0, amount),
+
+            Parent = object,
+        }
+    )
 end
 
-function Window:_list(parent, padding)
-    if self.Components.List then
-        return self.Components:List(
-            parent,
-            padding or 6
-        )
+function Window:_list(
+    parent,
+    padding
+)
+    if self.Components
+        and self.Components.List then
+
+        local success, result =
+            pcall(function()
+                return self.Components:List(
+                    parent,
+                    padding or 6
+                )
+            end)
+
+        if success then
+            return result
+        end
     end
 
-    return create("UIListLayout", {
-        Padding = UDim.new(
-            0,
-            padding or 6
-        ),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        Parent = parent
-    })
+    return create(
+        "UIListLayout",
+        {
+            Padding = UDim.new(
+                0,
+                padding or 6
+            ),
+
+            SortOrder =
+                Enum.SortOrder.LayoutOrder,
+
+            Parent = parent,
+        }
+    )
 end
 
-function Window:_card(parent, height)
-    if self.Components.CreateCard then
-        return self.Components:CreateCard(
-            parent,
-            height or 42
-        )
+function Window:_card(
+    parent,
+    height
+)
+    if self.Components
+        and self.Components.CreateCard then
+
+        local success, result =
+            pcall(function()
+                return self.Components:CreateCard(
+                    parent,
+                    height or 42
+                )
+            end)
+
+        if success and result then
+            return result
+        end
     end
 
-    local card = create("Frame", {
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            height or 42
-        ),
-        BackgroundColor3 = self.Theme.Card,
-        BorderSizePixel = 0,
-        Parent = parent
-    })
+    local card = create(
+        "Frame",
+        {
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                height or 42
+            ),
+
+            BackgroundColor3 =
+                self.Theme.Card,
+
+            BorderSizePixel = 0,
+
+            Parent = parent,
+        }
+    )
 
     self:_corner(card, 7)
 
@@ -468,32 +668,55 @@ function Window:_card(parent, height)
     return card
 end
 
-function Window:_button(parent, text)
-    if self.Components.CreateButton then
-        return self.Components:CreateButton(
-            parent,
-            text
-        )
+function Window:_button(
+    parent,
+    text
+)
+    if self.Components
+        and self.Components.CreateButton then
+
+        local success, result =
+            pcall(function()
+                return self.Components:CreateButton(
+                    parent,
+                    text
+                )
+            end)
+
+        if success and result then
+            return result
+        end
     end
 
-    local button = create("TextButton", {
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            36
-        ),
-        BackgroundColor3 = self.Theme.Card,
-        BorderSizePixel = 0,
-        AutoButtonColor = false,
+    local button = create(
+        "TextButton",
+        {
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                36
+            ),
 
-        Font = Enum.Font.GothamMedium,
-        Text = text or "Button",
-        TextColor3 = self.Theme.Text,
-        TextSize = 12,
+            BackgroundColor3 =
+                self.Theme.Card,
 
-        Parent = parent
-    })
+            BorderSizePixel = 0,
+
+            AutoButtonColor = false,
+
+            Font = Enum.Font.GothamMedium,
+
+            Text = text or "Button",
+
+            TextColor3 =
+                self.Theme.Text,
+
+            TextSize = 12,
+
+            Parent = parent,
+        }
+    )
 
     self:_corner(button, 7)
 
@@ -512,42 +735,58 @@ function Window:_addHover(
 
     self:_register(
         "HoverEnter_" .. tostring(object),
-        object.MouseEnter:Connect(function()
-            if self.Destroyed then
-                return
-            end
+        object.MouseEnter:Connect(
+            function()
+                if self.Destroyed then
+                    return
+                end
 
-            self:_play(
-                object,
-                {
-                    BackgroundColor3 = hoverColor
-                },
-                0.1
-            )
-        end)
+                self:_play(
+                    object,
+                    {
+                        BackgroundColor3 =
+                            hoverColor,
+                    },
+                    0.1
+                )
+            end
+        )
     )
 
     self:_register(
         "HoverLeave_" .. tostring(object),
-        object.MouseLeave:Connect(function()
-            if self.Destroyed then
-                return
-            end
+        object.MouseLeave:Connect(
+            function()
+                if self.Destroyed then
+                    return
+                end
 
-            self:_play(
-                object,
-                {
-                    BackgroundColor3 = normalColor
-                },
-                0.1
-            )
-        end)
+                self:_play(
+                    object,
+                    {
+                        BackgroundColor3 =
+                            normalColor,
+                    },
+                    0.1
+                )
+            end
+        )
     )
 end
 
-function Window:_registerPopup(popup)
+function Window:_registerPopup(
+    popup
+)
     if not popup then
         return
+    end
+
+    for _, existing in ipairs(
+        self._popups
+    ) do
+        if existing == popup then
+            return
+        end
     end
 
     table.insert(
@@ -556,12 +795,34 @@ function Window:_registerPopup(popup)
     )
 end
 
-function Window:_closePopups(except)
-    for _, popup in ipairs(self._popups) do
-        if popup
-            and popup ~= except
-            and popup.Parent then
+function Window:_unregisterPopup(
+    popup
+)
+    for index = #self._popups, 1, -1 do
+        if self._popups[index] == popup then
+            table.remove(
+                self._popups,
+                index
+            )
+        end
+    end
+end
 
+function Window:_closePopups(
+    except
+)
+    for index = #self._popups, 1, -1 do
+        local popup =
+            self._popups[index]
+
+        if not popup
+            or not popup.Parent then
+
+            table.remove(
+                self._popups,
+                index
+            )
+        elseif popup ~= except then
             popup.Visible = false
         end
     end
@@ -576,8 +837,9 @@ function Window:_setupPopupManager()
         "PopupManager",
         UserInputService.InputBegan:Connect(
             function(input, processed)
-                if processed
-                    or self.Destroyed then
+                if self.Destroyed
+                    or not self.Visible
+                    or processed then
                     return
                 end
 
@@ -586,26 +848,42 @@ function Window:_setupPopupManager()
                     return
                 end
 
-                local mousePosition = input.Position
+                local position =
+                    input.Position
 
-                for _, popup in ipairs(self._popups) do
-                    if popup
-                        and popup.Visible
-                        and popup.Parent then
+                for index = #self._popups, 1, -1 do
+                    local popup =
+                        self._popups[index]
 
-                        local position =
+                    if not popup
+                        or not popup.Parent then
+
+                        table.remove(
+                            self._popups,
+                            index
+                        )
+
+                        continue
+                    end
+
+                    if popup.Visible then
+                        local absolutePosition =
                             popup.AbsolutePosition
 
-                        local size =
+                        local absoluteSize =
                             popup.AbsoluteSize
 
                         local inside =
-                            mousePosition.X >= position.X
-                            and mousePosition.X <=
-                                position.X + size.X
-                            and mousePosition.Y >= position.Y
-                            and mousePosition.Y <=
-                                position.Y + size.Y
+                            position.X >=
+                                absolutePosition.X
+                            and position.X <=
+                                absolutePosition.X
+                                + absoluteSize.X
+                            and position.Y >=
+                                absolutePosition.Y
+                            and position.Y <=
+                                absolutePosition.Y
+                                + absoluteSize.Y
 
                         if not inside then
                             popup.Visible = false
@@ -622,228 +900,352 @@ function Window:_createResizeHandle()
         return
     end
 
-    local handle = create("TextButton", {
-        Name = "ResizeHandle",
+    local handle = create(
+        "TextButton",
+        {
+            Name = "ResizeHandle",
 
-        AnchorPoint = Vector2.new(1, 1),
+            AnchorPoint =
+                Vector2.new(1, 1),
 
-        Position = UDim2.new(1, 0, 1, 0),
+            Position =
+                UDim2.new(1, 0, 1, 0),
 
-        Size = UDim2.fromOffset(
-            self.Options.ResizeHandleSize,
-            self.Options.ResizeHandleSize
-        ),
+            Size =
+                UDim2.fromOffset(
+                    self.Options.ResizeHandleSize,
+                    self.Options.ResizeHandleSize
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Text = "",
+            Text = "",
 
-        AutoButtonColor = false,
+            AutoButtonColor = false,
 
-        ZIndex = 1000,
+            ZIndex = 1000,
 
-        Parent = self.Main
-    })
+            Parent = self.Main,
+        }
+    )
 
     self.ResizeHandle = handle
 
-    local visual = create("Frame", {
-        AnchorPoint = Vector2.new(1, 1),
+    local visual = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(1, 1),
 
-        Position = UDim2.new(1, -3, 1, -3),
+            Position =
+                UDim2.new(
+                    1,
+                    -3,
+                    1,
+                    -3
+                ),
 
-        Size = UDim2.fromOffset(8, 8),
+            Size =
+                UDim2.fromOffset(9, 9),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Parent = handle
-    })
+            Parent = handle,
+        }
+    )
 
-    for i = 0, 2 do
-        local line = create("Frame", {
-            AnchorPoint = Vector2.new(1, 1),
+    for index = 0, 2 do
+        local line = create(
+            "Frame",
+            {
+                Name =
+                    "ResizeLine"
+                    .. tostring(index),
 
-            Position = UDim2.new(
-                1,
-                -i * 3,
-                1,
-                i * 3
-            ),
+                AnchorPoint =
+                    Vector2.new(1, 1),
 
-            Size = UDim2.fromOffset(
-                1,
-                8 - i * 2
-            ),
+                Position =
+                    UDim2.new(
+                        1,
+                        -index * 3,
+                        1,
+                        index * 3
+                    ),
 
-            Rotation = -45,
+                Size =
+                    UDim2.fromOffset(
+                        1,
+                        8 - index * 2
+                    ),
 
-            BackgroundColor3 = self.Theme.MutedText,
+                Rotation = -45,
 
-            BackgroundTransparency = 0.45,
+                BackgroundColor3 =
+                    self.Theme.MutedText,
 
-            BorderSizePixel = 0,
+                BackgroundTransparency =
+                    0.45,
 
-            Parent = visual
-        })
+                BorderSizePixel = 0,
 
-        line.Name = "ResizeLine" .. tostring(i)
+                Parent = visual,
+            }
+        )
+
+        line.ZIndex = 1001
     end
 
     self:_register(
         "ResizeBegin",
-        handle.MouseButton1Down:Connect(function()
-            if self.Destroyed
-                or self.Minimized then
-                return
+        handle.MouseButton1Down:Connect(
+            function()
+                if self.Destroyed
+                    or self.Minimized then
+                    return
+                end
+
+                self:_beginResize()
             end
-
-            self._resizing = true
-
-            self._resizeStart =
-                UserInputService:GetMouseLocation()
-
-            self._resizeStartSize =
-                self.Main.AbsoluteSize
-
-            self._resizeStartPosition =
-                self.Main.AbsolutePosition
-        end)
+        )
     )
 
     self:_register(
         "ResizeChanged",
-        UserInputService.InputChanged:Connect(function(input)
-            if not self._resizing
-                or self.Destroyed then
-                return
+        UserInputService.InputChanged:Connect(
+            function(input)
+                if not self._resizing
+                    or self.Destroyed then
+                    return
+                end
+
+                if input.UserInputType
+                    ~= Enum.UserInputType.MouseMovement then
+                    return
+                end
+
+                self:_updateResize(
+                    input.Position
+                )
             end
-
-            if input.UserInputType
-                ~= Enum.UserInputType.MouseMovement then
-                return
-            end
-
-            local current =
-                input.Position
-
-            local delta =
-                current - self._resizeStart
-
-            self:_resizeByDelta(delta)
-        end)
+        )
     )
 
     self:_register(
         "ResizeEnd",
-        UserInputService.InputEnded:Connect(function(input)
-            if input.UserInputType
-                == Enum.UserInputType.MouseButton1 then
+        UserInputService.InputEnded:Connect(
+            function(input)
+                if input.UserInputType
+                    == Enum.UserInputType.MouseButton1 then
 
-                self._resizing = false
+                    self._resizing = false
+                end
             end
-        end)
+        )
     )
 end
 
-function Window:_resizeByDelta(delta)
-    if not self.Main then
+function Window:_beginResize()
+    if not self.Main
+        or self.Minimized then
         return
     end
 
-    local currentSize =
-        self.Main.AbsoluteSize
+    self._resizing = true
+
+    self._resizeStartMouse =
+        UserInputService:GetMouseLocation()
+
+    self._resizeStartSize =
+        getOffsetSize(
+            self.Main.Size
+        )
+
+    self._resizeStartPosition =
+        self.Main.Position
+end
+
+function Window:_updateResize(
+    mousePosition
+)
+    if not self._resizing
+        or not self.Main
+        or not self._resizeStartMouse
+        or not self._resizeStartSize then
+        return
+    end
+
+    local delta =
+        mousePosition
+        - self._resizeStartMouse
 
     local targetX =
-        currentSize.X + delta.X
+        self._resizeStartSize.X
+        + delta.X
 
     local targetY =
-        currentSize.Y + delta.Y
+        self._resizeStartSize.Y
+        + delta.Y
 
-    local minSize =
-        self.Options.MinSize
+    targetX = clampNumber(
+        targetX,
+        self.Options.MinSize.X,
+        self.Options.MaxSize.X
+    )
 
-    local maxSize =
-        self.Options.MaxSize
+    targetY = clampNumber(
+        targetY,
+        self.Options.MinSize.Y,
+        self.Options.MaxSize.Y
+    )
 
-    targetX =
-        math.clamp(
-            targetX,
-            minSize.X,
-            maxSize.X
-        )
+    if self.Options.ClampToScreen
+        and self.Gui then
 
-    targetY =
-        math.clamp(
-            targetY,
-            minSize.Y,
-            maxSize.Y
-        )
+        local viewport =
+            getViewport(self.Gui)
 
-    self.Main.Size =
+        local absolutePosition =
+            self.Main.AbsolutePosition
+
+        local right =
+            absolutePosition.X
+            + targetX
+
+        local bottom =
+            absolutePosition.Y
+            + targetY
+
+        local maxRight =
+            viewport.X
+
+        local maxBottom =
+            viewport.Y
+
+        if right > maxRight then
+            targetX =
+                math.max(
+                    self.Options.MinSize.X,
+                    targetX
+                    - (right - maxRight)
+                )
+        end
+
+        if bottom > maxBottom then
+            targetY =
+                math.max(
+                    self.Options.MinSize.Y,
+                    targetY
+                    - (bottom - maxBottom)
+                )
+        end
+    end
+
+    local finalSize =
         UDim2.fromOffset(
             targetX,
             targetY
         )
 
-    self._resizeStart =
-        UserInputService:GetMouseLocation()
+    self.Main.Size =
+        finalSize
+
+    self._normalSize =
+        finalSize
 end
 
 function Window:Create()
     if self.Destroyed then
-        error("Cannot create a destroyed Window")
+        error(
+            "Cannot create a destroyed Window"
+        )
     end
 
-    local player = Players.LocalPlayer
+    if self._created
+        and self.Gui
+        and self.Main then
+
+        return self
+    end
+
+    local player =
+        Players.LocalPlayer
 
     if not player then
-        error("LocalPlayer unavailable")
+        error(
+            "LocalPlayer unavailable"
+        )
     end
 
     local playerGui =
-        player:WaitForChild("PlayerGui")
+        player:WaitForChild(
+            "PlayerGui"
+        )
 
     local oldGui =
-        playerGui:FindFirstChild("LuaTestUI")
+        playerGui:FindFirstChild(
+            "LuaTestUI"
+        )
 
     if oldGui then
         oldGui:Destroy()
     end
 
-    local gui = create("ScreenGui", {
-        Name = "LuaTestUI",
-        ResetOnSpawn = false,
-        IgnoreGuiInset = true,
-        ZIndexBehavior =
-            Enum.ZIndexBehavior.Sibling,
-        Parent = playerGui
-    })
+    local gui = create(
+        "ScreenGui",
+        {
+            Name = "LuaTestUI",
+
+            ResetOnSpawn = false,
+
+            IgnoreGuiInset = true,
+
+            ZIndexBehavior =
+                Enum.ZIndexBehavior.Sibling,
+
+            Parent = playerGui,
+        }
+    )
 
     self.Gui = gui
 
-    local main = create("Frame", {
-        Name = "Main",
+    local main = create(
+        "Frame",
+        {
+            Name = "Main",
 
-        AnchorPoint =
-            Vector2.new(0.5, 0.5),
+            AnchorPoint =
+                Vector2.new(
+                    0.5,
+                    0.5
+                ),
 
-        Position =
-            self.Options.Position,
+            Position =
+                self.Options.Position,
 
-        Size =
-            self.Options.Size,
+            Size =
+                self.Options.Size,
 
-        BackgroundColor3 =
-            self.Theme.Background,
+            BackgroundColor3 =
+                self.Theme.Background,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        ClipsDescendants = false,
+            ClipsDescendants = false,
 
-        Parent = gui
-    })
+            ZIndex = WINDOW_ZINDEX,
+
+            Parent = gui,
+        }
+    )
 
     self.Main = main
+
+    self._normalSize =
+        self.Options.Size
+
+    self._normalPosition =
+        self.Options.Position
 
     self:_corner(
         main,
@@ -865,7 +1267,9 @@ function Window:Create()
     if self.Notifications
         and self.Notifications.Init then
 
-        self.Notifications:Init(gui)
+        pcall(function()
+            self.Notifications:Init(gui)
+        end)
     end
 
     self:_register(
@@ -877,13 +1281,16 @@ function Window:Create()
                     return
                 end
 
-                local ui = self.Config.UI
+                local ui =
+                    self.Config.UI
 
                 local toggleKey =
-                    ui and ui.ToggleKey
+                    ui
+                    and ui.ToggleKey
 
                 if toggleKey
-                    and input.KeyCode == toggleKey then
+                    and input.KeyCode
+                        == toggleKey then
 
                     self:Toggle()
                 end
@@ -893,60 +1300,104 @@ function Window:Create()
 
     self:_register(
         "WindowFocus",
-        main.InputBegan:Connect(function(input)
-            if self.Options.BringToFrontOnClick
-                and input.UserInputType
-                    == Enum.UserInputType.MouseButton1 then
+        main.InputBegan:Connect(
+            function(input)
+                if self.Destroyed then
+                    return
+                end
 
-                self:BringToFront()
+                if self.Options.BringToFrontOnClick
+                    and isInputMouseButton(input) then
+
+                    self:BringToFront()
+                end
             end
-        end)
+        )
     )
+
+    self:_register(
+        "ViewportChanged",
+        workspace.CurrentCamera
+            and workspace.CurrentCamera:GetPropertyChangedSignal(
+                "ViewportSize"
+            ):Connect(
+                function()
+                    if self.Destroyed
+                        or not self.Options.ClampToScreen then
+                        return
+                    end
+
+                    self:_clampPosition()
+                end
+            )
+    )
+
+    self._created = true
 
     self:SetVisible(
         true,
         false
     )
 
-    self:_emit("Created", self)
+    self:BringToFront()
+
+    self:_emit(
+        "Created",
+        self
+    )
 
     return self
 end
 
 function Window:_createHeader()
-    local header = create("Frame", {
-        Name = "Header",
+    local header = create(
+        "Frame",
+        {
+            Name = "Header",
 
-        Size = UDim2.new(
-            1,
-            0,
-            0,
-            self.Options.HeaderHeight
-        ),
+            Size = UDim2.new(
+                1,
+                0,
+                0,
+                self.Options.HeaderHeight
+            ),
 
-        BackgroundColor3 =
-            self.Theme.Secondary,
+            BackgroundColor3 =
+                self.Theme.Secondary,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = self.Main
-    })
+            ZIndex = self.Main.ZIndex + 1,
+
+            Parent = self.Main,
+        }
+    )
 
     self.Header = header
 
-    local accent = create("Frame", {
-        Name = "Accent",
+    local accent = create(
+        "Frame",
+        {
+            Name = "Accent",
 
-        Size =
-            UDim2.new(0, 3, 1, 0),
+            Size =
+                UDim2.new(
+                    0,
+                    3,
+                    1,
+                    0
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Accent,
+            BackgroundColor3 =
+                self.Theme.Accent,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = header
-    })
+            ZIndex = header.ZIndex + 1,
+
+            Parent = header,
+        }
+    )
 
     self.HeaderAccent = accent
 
@@ -955,150 +1406,203 @@ function Window:_createHeader()
         2
     )
 
-    local title = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(17, 7),
+    local title = create(
+        "TextLabel",
+        {
+            Position =
+                UDim2.fromOffset(
+                    17,
+                    7
+                ),
 
-        Size =
-            UDim2.new(0, 170, 0, 20),
+            Size =
+                UDim2.new(
+                    0,
+                    180,
+                    0,
+                    20
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.GothamBold,
+            Font =
+                Enum.Font.GothamBold,
 
-        Text = "Lua Test",
+            Text = "Lua Test",
 
-        TextColor3 =
-            self.Theme.Text,
+            TextColor3 =
+                self.Theme.Text,
 
-        TextSize = 15,
+            TextSize = 15,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent = header
-    })
+            ZIndex = header.ZIndex + 1,
+
+            Parent = header,
+        }
+    )
 
     self.Title = title
 
-    local subtitle = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(17, 27),
+    local subtitle = create(
+        "TextLabel",
+        {
+            Position =
+                UDim2.fromOffset(
+                    17,
+                    27
+                ),
 
-        Size =
-            UDim2.new(0, 220, 0, 16),
+            Size =
+                UDim2.new(
+                    0,
+                    220,
+                    0,
+                    16
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.Gotham,
+            Font =
+                Enum.Font.Gotham,
 
-        Text =
-            "Advanced Control Panel",
+            Text =
+                "Advanced Control Panel",
 
-        TextColor3 =
-            self.Theme.MutedText,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        TextSize = 9,
+            TextSize = 9,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent = header
-    })
+            ZIndex = header.ZIndex + 1,
+
+            Parent = header,
+        }
+    )
 
     self.Subtitle = subtitle
 
-    local minimize = create("TextButton", {
-        AnchorPoint =
-            Vector2.new(1, 0.5),
+    local minimize = create(
+        "TextButton",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                1,
-                -10,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    -10,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(28, 28),
+            Size =
+                UDim2.fromOffset(
+                    28,
+                    28
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Text = "—",
+            Text = "—",
 
-        Font =
-            Enum.Font.GothamBold,
+            Font =
+                Enum.Font.GothamBold,
 
-        TextSize = 18,
+            TextSize = 18,
 
-        TextColor3 =
-            self.Theme.MutedText,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        AutoButtonColor = false,
+            AutoButtonColor = false,
 
-        Parent = header
-    })
+            ZIndex = header.ZIndex + 2,
 
-    self.MinimizeButton = minimize
+            Parent = header,
+        }
+    )
+
+    self.MinimizeButton =
+        minimize
 
     self:_register(
         "Minimize",
         minimize.MouseButton1Click:Connect(
             function()
-                self:Minimize()
+                if self.Minimized then
+                    self:Restore()
+                else
+                    self:Minimize()
+                end
             end
         )
     )
 
     self:_addHover(
         minimize,
-        Color3.fromRGB(0, 0, 0),
+        Color3.new(0, 0, 0),
         self.Theme.Card
     )
 
-    local search = create("TextBox", {
-        AnchorPoint =
-            Vector2.new(1, 0.5),
+    local search = create(
+        "TextBox",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                1,
-                -48,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    -48,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(210, 30),
+            Size =
+                UDim2.fromOffset(
+                    210,
+                    30
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Background,
+            BackgroundColor3 =
+                self.Theme.Background,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        PlaceholderText =
-            "Search controls...",
+            PlaceholderText =
+                "Search controls...",
 
-        PlaceholderColor3 =
-            self.Theme.MutedText,
+            PlaceholderColor3 =
+                self.Theme.MutedText,
 
-        Text = "",
+            Text = "",
 
-        TextColor3 =
-            self.Theme.Text,
+            TextColor3 =
+                self.Theme.Text,
 
-        TextSize = 11,
+            TextSize = 11,
 
-        Font =
-            Enum.Font.Gotham,
+            Font =
+                Enum.Font.Gotham,
 
-        ClearTextOnFocus = false,
+            ClearTextOnFocus = false,
 
-        Parent = header
-    })
+            ZIndex = header.ZIndex + 2,
+
+            Parent = header,
+        }
+    )
 
     self.SearchBox = search
 
@@ -1123,56 +1627,73 @@ function Window:_createHeader()
         "SearchChanged",
         search:GetPropertyChangedSignal(
             "Text"
-        ):Connect(function()
-            self:Search(search.Text)
-        end)
+        ):Connect(
+            function()
+                self:Search(
+                    search.Text
+                )
+            end
+        )
     )
 
-    local searchIcon = create("TextLabel", {
-        AnchorPoint =
-            Vector2.new(1, 0.5),
+    local searchIcon = create(
+        "TextLabel",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                1,
-                -8,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    -8,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(18, 18),
+            Size =
+                UDim2.fromOffset(
+                    18,
+                    18
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.GothamBold,
+            Font =
+                Enum.Font.GothamBold,
 
-        Text = "⌕",
+            Text = "⌕",
 
-        TextColor3 =
-            self.Theme.MutedText,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        TextSize = 15,
+            TextSize = 15,
 
-        Parent = search
-    })
+            ZIndex = header.ZIndex + 3,
 
-    self.SearchIcon = searchIcon
+            Parent = search,
+        }
+    )
+
+    self.SearchIcon =
+        searchIcon
 
     self:_register(
         "HeaderDrag",
         header.InputBegan:Connect(
             function(input)
-                if input.UserInputType
-                    ~= Enum.UserInputType.MouseButton1 then
+                if not isInputMouseButton(input) then
                     return
                 end
 
-                local now = os.clock()
+                local now =
+                    os.clock()
 
                 if self.Options.DoubleClickHeader
-                    and now - self._lastHeaderClick
+                    and now
+                        - self._lastHeaderClick
                         <= self.Options.DoubleClickTime then
 
                     self._lastHeaderClick = 0
@@ -1186,59 +1707,74 @@ function Window:_createHeader()
                     return
                 end
 
-                self._lastHeaderClick = now
+                self._lastHeaderClick =
+                    now
 
-                self:_beginDrag(input)
+                self:_beginDrag(
+                    input
+                )
             end
         )
     )
 
-    self:_makeDraggable(header)
+    self:_makeDraggable(
+        header
+    )
 end
 
 function Window:_createBody()
-    local body = create("Frame", {
-        Name = "Body",
+    local body = create(
+        "Frame",
+        {
+            Name = "Body",
 
-        Position =
-            UDim2.fromOffset(
-                0,
-                self.Options.HeaderHeight
-            ),
+            Position =
+                UDim2.fromOffset(
+                    0,
+                    self.Options.HeaderHeight
+                ),
 
-        Size =
-            UDim2.new(
-                1,
-                0,
-                1,
-                -self.Options.HeaderHeight
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    1,
+                    -self.Options.HeaderHeight
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Parent = self.Main
-    })
+            ZIndex = self.Main.ZIndex + 1,
+
+            Parent = self.Main,
+        }
+    )
 
     self.Body = body
 
-    local sidebar = create("Frame", {
-        Name = "Sidebar",
+    local sidebar = create(
+        "Frame",
+        {
+            Name = "Sidebar",
 
-        Size =
-            UDim2.new(
-                0,
-                self.Options.SidebarWidth,
-                1,
-                0
-            ),
+            Size =
+                UDim2.new(
+                    0,
+                    self.Options.SidebarWidth,
+                    1,
+                    0
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Secondary,
+            BackgroundColor3 =
+                self.Theme.Secondary,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = body
-    })
+            ZIndex = body.ZIndex + 1,
+
+            Parent = body,
+        }
+    )
 
     self.Sidebar = sidebar
 
@@ -1247,132 +1783,161 @@ function Window:_createBody()
         7
     )
 
-    local sidebarLayout = create(
-        "UIListLayout",
+    self.SidebarLayout =
+        create(
+            "UIListLayout",
+            {
+                Padding =
+                    UDim.new(
+                        0,
+                        self.Options.TabSpacing
+                    ),
+
+                SortOrder =
+                    Enum.SortOrder.LayoutOrder,
+
+                Parent = sidebar,
+            }
+        )
+
+    self.SidebarPadding =
+        create(
+            "UIPadding",
+            {
+                PaddingTop =
+                    UDim.new(0, 10),
+
+                PaddingBottom =
+                    UDim.new(0, 34),
+
+                PaddingLeft =
+                    UDim.new(0, 8),
+
+                PaddingRight =
+                    UDim.new(0, 8),
+
+                Parent = sidebar,
+            }
+        )
+
+    self.SidebarLine =
+        create(
+            "Frame",
+            {
+                AnchorPoint =
+                    Vector2.new(1, 0),
+
+                Position =
+                    UDim2.new(
+                        1,
+                        0,
+                        0,
+                        0
+                    ),
+
+                Size =
+                    UDim2.new(
+                        0,
+                        1,
+                        1,
+                        0
+                    ),
+
+                BackgroundColor3 =
+                    self.Theme.Border,
+
+                BorderSizePixel = 0,
+
+                ZIndex = sidebar.ZIndex + 1,
+
+                Parent = sidebar,
+            }
+        )
+
+    local pages = create(
+        "Frame",
         {
-            Padding =
-                UDim.new(
-                    0,
-                    self.Options.TabSpacing
+            Name = "Pages",
+
+            Position =
+                UDim2.fromOffset(
+                    self.Options.SidebarWidth,
+                    0
                 ),
 
-            SortOrder =
-                Enum.SortOrder.LayoutOrder,
+            Size =
+                UDim2.new(
+                    1,
+                    -self.Options.SidebarWidth,
+                    1,
+                    0
+                ),
 
-            Parent = sidebar
+            BackgroundTransparency = 1,
+
+            ZIndex = body.ZIndex + 1,
+
+            Parent = body,
         }
     )
 
-    self.SidebarLayout = sidebarLayout
+    self.PagesContainer =
+        pages
 
-    local sidebarPadding = create(
-        "UIPadding",
-        {
-            PaddingTop =
-                UDim.new(0, 10),
+    self.Footer =
+        create(
+            "TextLabel",
+            {
+                AnchorPoint =
+                    Vector2.new(
+                        0,
+                        1
+                    ),
 
-            PaddingBottom =
-                UDim.new(0, 34),
+                Position =
+                    UDim2.new(
+                        0,
+                        10,
+                        1,
+                        -8
+                    ),
 
-            PaddingLeft =
-                UDim.new(0, 8),
+                Size =
+                    UDim2.new(
+                        1,
+                        -20,
+                        0,
+                        18
+                    ),
 
-            PaddingRight =
-                UDim.new(0, 8),
+                BackgroundTransparency = 1,
 
-            Parent = sidebar
-        }
-    )
+                Font =
+                    Enum.Font.Gotham,
 
-    self.SidebarPadding = sidebarPadding
+                Text =
+                    "Lua Test • Ready",
 
-    local sidebarLine = create("Frame", {
-        AnchorPoint =
-            Vector2.new(1, 0),
+                TextColor3 =
+                    self.Theme.MutedText,
 
-        Position =
-            UDim2.new(1, 0, 0, 0),
+                TextSize = 8,
 
-        Size =
-            UDim2.new(0, 1, 1, 0),
+                TextXAlignment =
+                    Enum.TextXAlignment.Left,
 
-        BackgroundColor3 =
-            self.Theme.Border,
+                ZIndex =
+                    sidebar.ZIndex + 1,
 
-        BorderSizePixel = 0,
-
-        Parent = sidebar
-    })
-
-    self.SidebarLine = sidebarLine
-
-    local pages = create("Frame", {
-        Name = "Pages",
-
-        Position =
-            UDim2.fromOffset(
-                self.Options.SidebarWidth,
-                0
-            ),
-
-        Size =
-            UDim2.new(
-                1,
-                -self.Options.SidebarWidth,
-                1,
-                0
-            ),
-
-        BackgroundTransparency = 1,
-
-        Parent = body
-    })
-
-    self.PagesContainer = pages
-
-    local footer = create("TextLabel", {
-        AnchorPoint =
-            Vector2.new(0, 1),
-
-        Position =
-            UDim2.new(
-                0,
-                10,
-                1,
-                -8
-            ),
-
-        Size =
-            UDim2.new(
-                1,
-                -20,
-                0,
-                18
-            ),
-
-        BackgroundTransparency = 1,
-
-        Font =
-            Enum.Font.Gotham,
-
-        Text =
-            "Lua Test • Ready",
-
-        TextColor3 =
-            self.Theme.MutedText,
-
-        TextSize = 8,
-
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
-
-        Parent = sidebar
-    })
-
-    self.Footer = footer
+                Parent = sidebar,
+            }
+        )
 end
 
-function Window:AddTab(name, icon)
+function Window:AddTab(
+    name,
+    icon
+)
     assert(
         type(name) == "string",
         "Tab name must be a string"
@@ -1390,153 +1955,198 @@ function Window:AddTab(name, icon)
         name
     )
 
-    local button = create("TextButton", {
-        Name =
-            name .. "Button",
+    local button = create(
+        "TextButton",
+        {
+            Name =
+                name .. "Button",
 
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                self.Options.TabHeight
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    self.Options.TabHeight
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Secondary,
+            BackgroundColor3 =
+                self.Theme.Secondary,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        AutoButtonColor = false,
+            AutoButtonColor = false,
 
-        Text = "",
+            Text = "",
 
-        LayoutOrder = order,
+            LayoutOrder = order,
 
-        Parent = self.Sidebar
-    })
+            ZIndex =
+                self.Sidebar.ZIndex + 2,
+
+            Parent = self.Sidebar,
+        }
+    )
 
     self:_corner(
         button,
         7
     )
 
-    local indicator = create("Frame", {
-        AnchorPoint =
-            Vector2.new(0, 0.5),
+    local indicator = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    0,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                0,
-                0,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    0,
+                    0,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(3, 18),
+            Size =
+                UDim2.fromOffset(
+                    3,
+                    18
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Accent,
+            BackgroundColor3 =
+                self.Theme.Accent,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Visible = false,
+            Visible = false,
 
-        Parent = button
-    })
+            ZIndex =
+                button.ZIndex + 1,
+
+            Parent = button,
+        }
+    )
 
     self:_corner(
         indicator,
         3
     )
 
-    local iconLabel = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(12, 0),
+    local iconLabel = create(
+        "TextLabel",
+        {
+            Position =
+                UDim2.fromOffset(
+                    12,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                22,
-                self.Options.TabHeight
-            ),
+            Size =
+                UDim2.fromOffset(
+                    22,
+                    self.Options.TabHeight
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.GothamMedium,
+            Font =
+                Enum.Font.GothamMedium,
 
-        Text =
-            icon or "•",
+            Text =
+                icon or "•",
 
-        TextColor3 =
-            self.Theme.MutedText,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        TextSize = 12,
+            TextSize = 12,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Center,
+            TextXAlignment =
+                Enum.TextXAlignment.Center,
 
-        Parent = button
-    })
+            ZIndex =
+                button.ZIndex + 1,
 
-    local textLabel = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(39, 0),
+            Parent = button,
+        }
+    )
 
-        Size =
-            UDim2.new(
-                1,
-                -48,
-                1,
-                0
-            ),
+    local textLabel = create(
+        "TextLabel",
+        {
+            Position =
+                UDim2.fromOffset(
+                    39,
+                    0
+                ),
 
-        BackgroundTransparency = 1,
+            Size =
+                UDim2.new(
+                    1,
+                    -48,
+                    1,
+                    0
+                ),
 
-        Font =
-            Enum.Font.GothamMedium,
+            BackgroundTransparency = 1,
 
-        Text = name,
+            Font =
+                Enum.Font.GothamMedium,
 
-        TextColor3 =
-            self.Theme.MutedText,
+            Text = name,
 
-        TextSize = 11,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextSize = 11,
 
-        Parent = button
-    })
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-    local page = create("ScrollingFrame", {
-        Name =
-            name .. "Page",
+            ZIndex =
+                button.ZIndex + 1,
 
-        Size =
-            UDim2.fromScale(1, 1),
+            Parent = button,
+        }
+    )
 
-        BackgroundTransparency = 1,
+    local page = create(
+        "ScrollingFrame",
+        {
+            Name =
+                name .. "Page",
 
-        BorderSizePixel = 0,
+            Size =
+                UDim2.fromScale(
+                    1,
+                    1
+                ),
 
-        ScrollBarThickness = 3,
+            BackgroundTransparency = 1,
 
-        ScrollBarImageColor3 =
-            self.Theme.Accent,
+            BorderSizePixel = 0,
 
-        AutomaticCanvasSize =
-            Enum.AutomaticSize.Y,
+            ScrollBarThickness = 3,
 
-        CanvasSize =
-            UDim2.new(),
+            ScrollBarImageColor3 =
+                self.Theme.Accent,
 
-        Visible = false,
+            AutomaticCanvasSize =
+                Enum.AutomaticSize.Y,
 
-        Parent =
-            self.PagesContainer
-    })
+            CanvasSize =
+                UDim2.new(),
+
+            Visible = false,
+
+            ZIndex =
+                self.PagesContainer.ZIndex + 1,
+
+            Parent =
+                self.PagesContainer,
+        }
+    )
 
     self:_padding(
         page,
@@ -1544,7 +2154,10 @@ function Window:AddTab(name, icon)
     )
 
     local layout =
-        self:_list(page, 10)
+        self:_list(
+            page,
+            10
+        )
 
     local tab = {
         Name = name,
@@ -1561,7 +2174,7 @@ function Window:AddTab(name, icon)
 
         Sections = {},
 
-        Order = order
+        Order = order,
     }
 
     self.Tabs[name] = tab
@@ -1570,7 +2183,9 @@ function Window:AddTab(name, icon)
         "Tab_" .. name,
         button.MouseButton1Click:Connect(
             function()
-                self:SelectTab(name)
+                self:SelectTab(
+                    name
+                )
             end
         )
     )
@@ -1582,13 +2197,17 @@ function Window:AddTab(name, icon)
     )
 
     if not self.CurrentTab then
-        self:SelectTab(name)
+        self:SelectTab(
+            name
+        )
     end
 
     return tab
 end
 
-function Window:SelectTab(name)
+function Window:SelectTab(
+    name
+)
     local selected =
         self.Tabs[name]
 
@@ -1596,14 +2215,20 @@ function Window:SelectTab(name)
         return false
     end
 
-    self.CurrentTab = name
+    self.CurrentTab =
+        name
 
-    for tabName, tab in pairs(self.Tabs) do
+    for tabName, tab in pairs(
+        self.Tabs
+    ) do
         local active =
             tabName == name
 
-        tab.Page.Visible = active
-        tab.Indicator.Visible = active
+        tab.Page.Visible =
+            active
+
+        tab.Indicator.Visible =
+            active
 
         self:_play(
             tab.Button,
@@ -1611,29 +2236,19 @@ function Window:SelectTab(name)
                 BackgroundColor3 =
                     active
                     and self.Theme.Accent
-                    or self.Theme.Secondary
+                    or self.Theme.Secondary,
             }
         )
 
-        self:_play(
-            tab.Label,
-            {
-                TextColor3 =
-                    active
-                    and Color3.new(1, 1, 1)
-                    or self.Theme.MutedText
-            }
-        )
+        tab.Label.TextColor3 =
+            active
+            and Color3.new(1, 1, 1)
+            or self.Theme.MutedText
 
-        self:_play(
-            tab.Icon,
-            {
-                TextColor3 =
-                    active
-                    and Color3.new(1, 1, 1)
-                    or self.Theme.MutedText
-            }
-        )
+        tab.Icon.TextColor3 =
+            active
+            and Color3.new(1, 1, 1)
+            or self.Theme.MutedText
     end
 
     return true
@@ -1653,29 +2268,36 @@ function Window:AddSection(
             .. tostring(tabName)
     )
 
-    local section = create("Frame", {
-        Name =
-            title .. "Section",
+    local section = create(
+        "Frame",
+        {
+            Name =
+                tostring(title)
+                .. "Section",
 
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                60
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    60
+                ),
 
-        AutomaticSize =
-            Enum.AutomaticSize.Y,
+            AutomaticSize =
+                Enum.AutomaticSize.Y,
 
-        BackgroundColor3 =
-            self.Theme.Secondary,
+            BackgroundColor3 =
+                self.Theme.Secondary,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent =
-            tab.Page
-    })
+            ZIndex =
+                tab.Page.ZIndex + 1,
+
+            Parent =
+                tab.Page,
+        }
+    )
 
     self:_corner(
         section,
@@ -1695,95 +2317,117 @@ function Window:AddSection(
         11
     )
 
-    local titleLabel = create("TextLabel", {
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                20
-            ),
+    local titleLabel = create(
+        "TextLabel",
+        {
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    20
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.GothamBold,
+            Font =
+                Enum.Font.GothamBold,
 
-        Text = title,
+            Text =
+                tostring(title),
 
-        TextColor3 =
-            self.Theme.Text,
+            TextColor3 =
+                self.Theme.Text,
 
-        TextSize = 13,
+            TextSize = 13,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent = section
-    })
+            ZIndex =
+                section.ZIndex + 1,
+
+            Parent = section,
+        }
+    )
 
     local descriptionLabel
 
     if description then
         descriptionLabel =
-            create("TextLabel", {
-                Position =
-                    UDim2.fromOffset(
-                        0,
-                        21
-                    ),
+            create(
+                "TextLabel",
+                {
+                    Position =
+                        UDim2.fromOffset(
+                            0,
+                            21
+                        ),
 
-                Size =
-                    UDim2.new(
-                        1,
-                        0,
-                        0,
-                        18
-                    ),
+                    Size =
+                        UDim2.new(
+                            1,
+                            0,
+                            0,
+                            18
+                        ),
 
-                BackgroundTransparency = 1,
+                    BackgroundTransparency = 1,
 
-                Font =
-                    Enum.Font.Gotham,
+                    Font =
+                        Enum.Font.Gotham,
 
-                Text = description,
+                    Text =
+                        tostring(
+                            description
+                        ),
 
-                TextColor3 =
-                    self.Theme.MutedText,
+                    TextColor3 =
+                        self.Theme.MutedText,
 
-                TextSize = 9,
+                    TextSize = 9,
 
-                TextXAlignment =
-                    Enum.TextXAlignment.Left,
+                    TextXAlignment =
+                        Enum.TextXAlignment.Left,
 
-                Parent = section
-            })
+                    ZIndex =
+                        section.ZIndex + 1,
+
+                    Parent = section,
+                }
+            )
     end
 
-    local content = create("Frame", {
-        Position =
-            UDim2.fromOffset(
-                0,
-                description
-                and 44
-                or 26
-            ),
+    local content = create(
+        "Frame",
+        {
+            Position =
+                UDim2.fromOffset(
+                    0,
+                    description
+                    and 44
+                    or 26
+                ),
 
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                0
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    0
+                ),
 
-        AutomaticSize =
-            Enum.AutomaticSize.Y,
+            AutomaticSize =
+                Enum.AutomaticSize.Y,
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Parent = section
-    })
+            ZIndex =
+                section.ZIndex + 1,
+
+            Parent = section,
+        }
+    )
 
     local layout =
         self:_list(
@@ -1796,19 +2440,25 @@ function Window:AddSection(
         Content = content,
 
         Title = titleLabel,
-        Description = descriptionLabel,
+        Description =
+            descriptionLabel,
 
         Layout = layout,
         Stroke = stroke,
 
         Controls = {},
 
-        Name = title,
-        Tab = tabName
+        Name = tostring(title),
+        Tab = tabName,
     }
 
     table.insert(
         tab.Sections,
+        sectionData
+    )
+
+    table.insert(
+        self.Sections,
         sectionData
     )
 
@@ -1821,9 +2471,19 @@ function Window:_registerControl(
     name,
     description
 )
-    control.Name = name
-    control.Description = description
-    control.Section = section
+    if not control then
+        return nil
+    end
+
+    control.Name =
+        tostring(name or "")
+
+    control.Description =
+        description
+
+    control.Section =
+        section
+
     control.Visible = true
 
     table.insert(
@@ -1853,175 +2513,185 @@ function Window:AddToggle(
     local value =
         default == true
 
-    local height =
-        description
-        and 58
-        or 44
-
     local card =
         self:_card(
             section.Content,
-            height
+            description and 58 or 44
         )
 
-    local label = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(
-                12,
-                6
-            ),
+    local label = create(
+        "TextLabel",
+        {
+            Position =
+                UDim2.fromOffset(
+                    12,
+                    6
+                ),
 
-        Size =
-            UDim2.new(
-                1,
-                -72,
-                0,
-                20
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    -72,
+                    0,
+                    20
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.GothamMedium,
+            Font =
+                Enum.Font.GothamMedium,
 
-        Text = name,
+            Text = name,
 
-        TextColor3 =
-            self.Theme.Text,
+            TextColor3 =
+                self.Theme.Text,
 
-        TextSize = 12,
+            TextSize = 12,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent = card
-    })
+            Parent = card,
+        }
+    )
 
     local descriptionLabel
 
     if description then
         descriptionLabel =
-            create("TextLabel", {
-                Position =
-                    UDim2.fromOffset(
-                        12,
-                        27
-                    ),
+            create(
+                "TextLabel",
+                {
+                    Position =
+                        UDim2.fromOffset(
+                            12,
+                            27
+                        ),
 
-                Size =
-                    UDim2.new(
-                        1,
-                        -72,
-                        0,
-                        18
-                    ),
+                    Size =
+                        UDim2.new(
+                            1,
+                            -72,
+                            0,
+                            18
+                        ),
 
-                BackgroundTransparency = 1,
+                    BackgroundTransparency = 1,
 
-                Font =
-                    Enum.Font.Gotham,
+                    Font =
+                        Enum.Font.Gotham,
 
-                Text = description,
+                    Text = description,
 
-                TextColor3 =
-                    self.Theme.MutedText,
+                    TextColor3 =
+                        self.Theme.MutedText,
 
-                TextSize = 9,
+                    TextSize = 9,
 
-                TextXAlignment =
-                    Enum.TextXAlignment.Left,
+                    TextXAlignment =
+                        Enum.TextXAlignment.Left,
 
-                Parent = card
-            })
+                    Parent = card,
+                }
+            )
     end
 
-    local switch = create("Frame", {
-        AnchorPoint =
-            Vector2.new(
-                1,
-                0.5
-            ),
+    local switch = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                1,
-                -12,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    -12,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                36,
-                20
-            ),
+            Size =
+                UDim2.fromOffset(
+                    36,
+                    20
+                ),
 
-        BackgroundColor3 =
-            value
-            and self.Theme.Accent
-            or self.Theme.Border,
+            BackgroundColor3 =
+                value
+                and self.Theme.Accent
+                or self.Theme.Border,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = card
-    })
+            Parent = card,
+        }
+    )
 
     self:_corner(
         switch,
         10
     )
 
-    local knob = create("Frame", {
-        AnchorPoint =
-            Vector2.new(
-                0,
-                0.5
-            ),
+    local knob = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    0,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                value and 1 or 0,
-                value and -18 or 2,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    value and 1 or 0,
+                    value and -18 or 2,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                16,
-                16
-            ),
+            Size =
+                UDim2.fromOffset(
+                    16,
+                    16
+                ),
 
-        BackgroundColor3 =
-            Color3.new(
-                1,
-                1,
-                1
-            ),
+            BackgroundColor3 =
+                Color3.new(
+                    1,
+                    1,
+                    1
+                ),
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = switch
-    })
+            Parent = switch,
+        }
+    )
 
     self:_corner(
         knob,
         9
     )
 
-    local button = create("TextButton", {
-        Size =
-            UDim2.fromScale(
-                1,
-                1
-            ),
+    local button = create(
+        "TextButton",
+        {
+            Size =
+                UDim2.fromScale(
+                    1,
+                    1
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Text = "",
+            Text = "",
 
-        Parent = card
-    })
+            Parent = card,
+        }
+    )
 
     local control
 
@@ -2038,7 +2708,7 @@ function Window:AddToggle(
                 BackgroundColor3 =
                     value
                     and self.Theme.Accent
-                    or self.Theme.Border
+                    or self.Theme.Border,
             }
         )
 
@@ -2051,7 +2721,7 @@ function Window:AddToggle(
                         value and -18 or 2,
                         0.5,
                         0
-                    )
+                    ),
             }
         )
 
@@ -2081,15 +2751,23 @@ function Window:AddToggle(
             return value
         end,
 
-        Set = function(newValue)
-            update(newValue)
+        Set = function(
+            newValue
+        )
+            update(
+                newValue
+            )
         end,
 
         Card = card,
         Button = button,
         Label = label,
+
         DescriptionLabel =
-            descriptionLabel
+            descriptionLabel,
+
+        Switch = switch,
+        Knob = knob,
     }
 
     return self:_registerControl(
@@ -2121,15 +2799,18 @@ function Window:AddButton(
         "Button_" .. name,
         button.MouseButton1Click:Connect(
             function()
-                safeCallback(callback)
+                safeCallback(
+                    callback
+                )
             end
         )
     )
 
     local control = {
         Type = "Button",
+
         Button = button,
-        Card = button
+        Card = button,
     }
 
     return self:_registerControl(
@@ -2155,17 +2836,17 @@ function Window:AddSlider(
         tonumber(maximum)
         or 100
 
-    default =
-        tonumber(default)
-        or minimum
-
     if maximum <= minimum then
         maximum =
             minimum + 1
     end
 
+    default =
+        tonumber(default)
+        or minimum
+
     local value =
-        math.clamp(
+        clampNumber(
             default,
             minimum,
             maximum
@@ -2177,58 +2858,20 @@ function Window:AddSlider(
             64
         )
 
-    local label = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(
-                12,
-                7
-            ),
-
-        Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                18
-            ),
-
-        BackgroundTransparency = 1,
-
-        Font =
-            Enum.Font.GothamMedium,
-
-        Text = name,
-
-        TextColor3 =
-            self.Theme.Text,
-
-        TextSize = 12,
-
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
-
-        Parent = card
-    })
-
-    local valueLabel =
-        create("TextLabel", {
-            AnchorPoint =
-                Vector2.new(
-                    1,
-                    0
-                ),
-
+    local label = create(
+        "TextLabel",
+        {
             Position =
-                UDim2.new(
-                    1,
-                    -12,
-                    0,
+                UDim2.fromOffset(
+                    12,
                     7
                 ),
 
             Size =
-                UDim2.fromOffset(
-                    70,
+                UDim2.new(
+                    1,
+                    -24,
+                    0,
                     18
                 ),
 
@@ -2237,120 +2880,176 @@ function Window:AddSlider(
             Font =
                 Enum.Font.GothamMedium,
 
-            TextColor3 =
-                self.Theme.Accent,
+            Text = name,
 
-            TextSize = 11,
+            TextColor3 =
+                self.Theme.Text,
+
+            TextSize = 12,
 
             TextXAlignment =
-                Enum.TextXAlignment.Right,
+                Enum.TextXAlignment.Left,
 
-            Parent = card
-        })
+            Parent = card,
+        }
+    )
 
-    local bar = create("Frame", {
-        Position =
-            UDim2.new(
-                0,
-                12,
-                0,
-                39
-            ),
+    local valueLabel =
+        create(
+            "TextLabel",
+            {
+                AnchorPoint =
+                    Vector2.new(
+                        1,
+                        0
+                    ),
 
-        Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                6
-            ),
+                Position =
+                    UDim2.new(
+                        1,
+                        -12,
+                        0,
+                        7
+                    ),
 
-        BackgroundColor3 =
-            self.Theme.Border,
+                Size =
+                    UDim2.fromOffset(
+                        70,
+                        18
+                    ),
 
-        BorderSizePixel = 0,
+                BackgroundTransparency = 1,
 
-        Parent = card
-    })
+                Font =
+                    Enum.Font.GothamMedium,
+
+                TextColor3 =
+                    self.Theme.Accent,
+
+                TextSize = 11,
+
+                TextXAlignment =
+                    Enum.TextXAlignment.Right,
+
+                Parent = card,
+            }
+        )
+
+    local bar = create(
+        "Frame",
+        {
+            Position =
+                UDim2.new(
+                    0,
+                    12,
+                    0,
+                    39
+                ),
+
+            Size =
+                UDim2.new(
+                    1,
+                    -24,
+                    0,
+                    6
+                ),
+
+            BackgroundColor3 =
+                self.Theme.Border,
+
+            BorderSizePixel = 0,
+
+            Parent = card,
+        }
+    )
 
     self:_corner(
         bar,
         4
     )
 
-    local fill = create("Frame", {
-        Size =
-            UDim2.new(
-                0,
-                0,
-                1,
-                0
-            ),
+    local fill = create(
+        "Frame",
+        {
+            Size =
+                UDim2.new(
+                    0,
+                    0,
+                    1,
+                    0
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Accent,
+            BackgroundColor3 =
+                self.Theme.Accent,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = bar
-    })
+            Parent = bar,
+        }
+    )
 
     self:_corner(
         fill,
         4
     )
 
-    local knob = create("Frame", {
-        AnchorPoint =
-            Vector2.new(
-                0.5,
-                0.5
-            ),
+    local knob = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    0.5,
+                    0.5
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                12,
-                12
-            ),
+            Size =
+                UDim2.fromOffset(
+                    12,
+                    12
+                ),
 
-        BackgroundColor3 =
-            Color3.new(
-                1,
-                1,
-                1
-            ),
+            BackgroundColor3 =
+                Color3.new(
+                    1,
+                    1,
+                    1
+                ),
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = bar
-    })
+            Parent = bar,
+        }
+    )
 
     self:_corner(
         knob,
         7
     )
 
-    local hitbox = create("TextButton", {
-        Size =
-            UDim2.new(
-                1,
-                0,
-                1,
-                20
-            ),
+    local hitbox = create(
+        "TextButton",
+        {
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    1,
+                    20
+                ),
 
-        Position =
-            UDim2.fromOffset(
-                0,
-                -10
-            ),
+            Position =
+                UDim2.fromOffset(
+                    0,
+                    -10
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Text = "",
+            Text = "",
 
-        Parent = bar
-    })
+            Parent = bar,
+        }
+    )
 
     local dragging = false
 
@@ -2359,9 +3058,8 @@ function Window:AddSlider(
         fire
     )
         value =
-            math.clamp(
-                tonumber(newValue)
-                    or minimum,
+            clampNumber(
+                newValue,
                 minimum,
                 maximum
             )
@@ -2420,18 +3118,15 @@ function Window:AddSlider(
                 )
                 /
                 bar.AbsoluteSize.X,
-
                 0,
                 1
             )
 
         setValue(
             minimum
-            +
-            (
-                maximum - minimum
-            )
-            * alpha
+                + (
+                    maximum - minimum
+                ) * alpha
         )
     end
 
@@ -2446,12 +3141,10 @@ function Window:AddSlider(
             function()
                 dragging = true
 
-                updateFromInput(
-                    {
-                        Position =
-                            UserInputService:GetMouseLocation()
-                    }
-                )
+                updateFromInput({
+                    Position =
+                        UserInputService:GetMouseLocation(),
+                })
             end
         )
     )
@@ -2465,10 +3158,11 @@ function Window:AddSlider(
                 end
 
                 if input.UserInputType
-                    ==
-                    Enum.UserInputType.MouseMovement then
+                    == Enum.UserInputType.MouseMovement then
 
-                    updateFromInput(input)
+                    updateFromInput(
+                        input
+                    )
                 end
             end
         )
@@ -2479,8 +3173,7 @@ function Window:AddSlider(
         UserInputService.InputEnded:Connect(
             function(input)
                 if input.UserInputType
-                    ==
-                    Enum.UserInputType.MouseButton1 then
+                    == Enum.UserInputType.MouseButton1 then
 
                     dragging = false
                 end
@@ -2495,7 +3188,9 @@ function Window:AddSlider(
             return value
         end,
 
-        Set = function(newValue)
+        Set = function(
+            newValue
+        )
             setValue(
                 newValue
             )
@@ -2503,9 +3198,13 @@ function Window:AddSlider(
 
         Card = card,
         Button = hitbox,
+        Label = label,
         Fill = fill,
         Knob = knob,
-        ValueLabel = valueLabel
+        ValueLabel = valueLabel,
+
+        Minimum = minimum,
+        Maximum = maximum,
     }
 
     return self:_registerControl(
@@ -2529,8 +3228,7 @@ function Window:AddDropdown(
         default
 
     if current == nil then
-        current =
-            values[1]
+        current = values[1]
     end
 
     local card =
@@ -2541,165 +3239,185 @@ function Window:AddDropdown(
 
     card.ZIndex = 10
 
-    local button = create("TextButton", {
-        Size =
-            UDim2.fromScale(
-                1,
-                1
-            ),
+    local button = create(
+        "TextButton",
+        {
+            Size =
+                UDim2.fromScale(
+                    1,
+                    1
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Text = "",
+            Text = "",
 
-        Parent = card
-    })
+            ZIndex = 11,
 
-    button.ZIndex = 11
+            Parent = card,
+        }
+    )
 
-    local label = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(
-                12,
-                0
-            ),
+    local label = create(
+        "TextLabel",
+        {
+            Position =
+                UDim2.fromOffset(
+                    12,
+                    0
+                ),
 
-        Size =
-            UDim2.new(
-                1,
-                -100,
-                1,
-                0
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    -100,
+                    1,
+                    0
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.GothamMedium,
+            Font =
+                Enum.Font.GothamMedium,
 
-        Text = name,
+            Text = name,
 
-        TextColor3 =
-            self.Theme.Text,
+            TextColor3 =
+                self.Theme.Text,
 
-        TextSize = 12,
+            TextSize = 12,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent = button
-    })
+            ZIndex = 12,
 
-    local selected = create("TextLabel", {
-        AnchorPoint =
-            Vector2.new(
-                1,
-                0.5
-            ),
+            Parent = button,
+        }
+    )
 
-        Position =
-            UDim2.new(
-                1,
-                -30,
-                0.5,
-                0
-            ),
+    local selected = create(
+        "TextLabel",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                110,
-                20
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    -30,
+                    0.5,
+                    0
+                ),
 
-        BackgroundTransparency = 1,
+            Size =
+                UDim2.fromOffset(
+                    110,
+                    20
+                ),
 
-        Font =
-            Enum.Font.Gotham,
+            BackgroundTransparency = 1,
 
-        Text =
-            tostring(
-                current
-                or "None"
-            ),
+            Font =
+                Enum.Font.Gotham,
 
-        TextColor3 =
-            self.Theme.MutedText,
+            Text =
+                tostring(
+                    current or "None"
+                ),
 
-        TextSize = 10,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Right,
+            TextSize = 10,
 
-        Parent = button
-    })
+            TextXAlignment =
+                Enum.TextXAlignment.Right,
 
-    local arrow = create("TextLabel", {
-        AnchorPoint =
-            Vector2.new(
-                1,
-                0.5
-            ),
+            ZIndex = 12,
 
-        Position =
-            UDim2.new(
-                1,
-                -10,
-                0.5,
-                0
-            ),
+            Parent = button,
+        }
+    )
 
-        Size =
-            UDim2.fromOffset(
-                14,
-                18
-            ),
+    local arrow = create(
+        "TextLabel",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        BackgroundTransparency = 1,
+            Position =
+                UDim2.new(
+                    1,
+                    -10,
+                    0.5,
+                    0
+                ),
 
-        Font =
-            Enum.Font.GothamBold,
+            Size =
+                UDim2.fromOffset(
+                    14,
+                    18
+                ),
 
-        Text = "›",
+            BackgroundTransparency = 1,
 
-        TextColor3 =
-            self.Theme.MutedText,
+            Font =
+                Enum.Font.GothamBold,
 
-        TextSize = 14,
+            Text = "›",
 
-        Parent = button
-    })
+            TextColor3 =
+                self.Theme.MutedText,
 
-    local popup = create("Frame", {
-        Position =
-            UDim2.new(
-                0,
-                0,
-                1,
-                5
-            ),
+            TextSize = 14,
 
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                math.min(
-                    #values * 32 + 8,
-                    170
-                )
-            ),
+            ZIndex = 12,
 
-        BackgroundColor3 =
-            self.Theme.Background,
+            Parent = button,
+        }
+    )
 
-        BorderSizePixel = 0,
+    local popup = create(
+        "Frame",
+        {
+            Position =
+                UDim2.new(
+                    0,
+                    0,
+                    1,
+                    5
+                ),
 
-        Visible = false,
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    math.min(
+                        #values * 32 + 8,
+                        170
+                    )
+                ),
 
-        ZIndex = 100,
+            BackgroundColor3 =
+                self.Theme.Background,
 
-        Parent = card
-    })
+            BorderSizePixel = 0,
+
+            Visible = false,
+
+            ZIndex = 100,
+
+            Parent = card,
+        }
+    )
 
     self:_corner(
         popup,
@@ -2718,18 +3436,10 @@ function Window:AddDropdown(
         4
     )
 
-    create("UIListLayout", {
-        Padding =
-            UDim.new(
-                0,
-                2
-            ),
-
-        SortOrder =
-            Enum.SortOrder.LayoutOrder,
-
-        Parent = popup
-    })
+    self:_list(
+        popup,
+        2
+    )
 
     self:_registerPopup(
         popup
@@ -2739,7 +3449,9 @@ function Window:AddDropdown(
 
     local function close()
         open = false
+
         popup.Visible = false
+
         arrow.Text = "›"
     end
 
@@ -2747,7 +3459,9 @@ function Window:AddDropdown(
         newValue,
         fire
     )
-        for _, option in ipairs(values) do
+        for _, option in ipairs(
+            values
+        ) do
             if option == newValue then
                 current = newValue
 
@@ -2770,13 +3484,14 @@ function Window:AddDropdown(
         return false
     end
 
-    for index, option in ipairs(values) do
+    for index, option in ipairs(
+        values
+    ) do
         local optionButton =
             create(
                 "TextButton",
                 {
-                    LayoutOrder =
-                        index,
+                    LayoutOrder = index,
 
                     Size =
                         UDim2.new(
@@ -2806,7 +3521,7 @@ function Window:AddDropdown(
 
                     ZIndex = 101,
 
-                    Parent = popup
+                    Parent = popup,
                 }
             )
 
@@ -2816,7 +3531,9 @@ function Window:AddDropdown(
         )
 
         self:_register(
-            "DropdownHover_" .. name .. index,
+            "DropdownHover_"
+                .. name
+                .. index,
             optionButton.MouseEnter:Connect(
                 function()
                     optionButton.BackgroundColor3 =
@@ -2826,7 +3543,9 @@ function Window:AddDropdown(
         )
 
         self:_register(
-            "DropdownLeave_" .. name .. index,
+            "DropdownLeave_"
+                .. name
+                .. index,
             optionButton.MouseLeave:Connect(
                 function()
                     optionButton.BackgroundColor3 =
@@ -2836,7 +3555,9 @@ function Window:AddDropdown(
         )
 
         self:_register(
-            "DropdownOption_" .. name .. index,
+            "DropdownOption_"
+                .. name
+                .. index,
             optionButton.MouseButton1Click:Connect(
                 function()
                     setValue(
@@ -2853,8 +3574,7 @@ function Window:AddDropdown(
         "Dropdown_" .. name,
         button.MouseButton1Click:Connect(
             function()
-                open =
-                    not open
+                open = not open
 
                 if open then
                     self:_closePopups(
@@ -2880,16 +3600,22 @@ function Window:AddDropdown(
             return current
         end,
 
-        Set = function(value)
+        Set = function(
+            newValue
+        )
             setValue(
-                value
+                newValue
             )
         end,
 
         Card = card,
         Button = button,
+        Label = label,
         Popup = popup,
-        Selected = selected
+        Selected = selected,
+        Arrow = arrow,
+
+        Values = values,
     }
 
     return self:_registerControl(
@@ -2906,7 +3632,8 @@ function Window:AddColorPicker(
     callback
 )
     local value =
-        typeof(default) == "Color3"
+        typeof(default)
+            == "Color3"
         and default
         or Color3.new(
             1,
@@ -2920,64 +3647,70 @@ function Window:AddColorPicker(
             42
         )
 
-    local button = create("TextButton", {
-        Size =
-            UDim2.fromScale(
-                1,
-                1
-            ),
+    local button = create(
+        "TextButton",
+        {
+            Size =
+                UDim2.fromScale(
+                    1,
+                    1
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Text = name,
+            Text = name,
 
-        TextColor3 =
-            self.Theme.Text,
+            TextColor3 =
+                self.Theme.Text,
 
-        TextSize = 12,
+            TextSize = 12,
 
-        Font =
-            Enum.Font.GothamMedium,
+            Font =
+                Enum.Font.GothamMedium,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent = card
-    })
+            Parent = card,
+        }
+    )
 
     self:_padding(
         button,
         12
     )
 
-    local preview = create("Frame", {
-        AnchorPoint =
-            Vector2.new(
-                1,
-                0.5
-            ),
+    local preview = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    0.5
+                ),
 
-        Position =
-            UDim2.new(
-                1,
-                -12,
-                0.5,
-                0
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    -12,
+                    0.5,
+                    0
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                30,
-                19
-            ),
+            Size =
+                UDim2.fromOffset(
+                    30,
+                    19
+                ),
 
-        BackgroundColor3 =
-            value,
+            BackgroundColor3 =
+                value,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent = button
-    })
+            Parent = button,
+        }
+    )
 
     self:_corner(
         preview,
@@ -2995,38 +3728,41 @@ function Window:AddColorPicker(
         0.5
     )
 
-    local popup = create("Frame", {
-        AnchorPoint =
-            Vector2.new(
-                1,
-                1
-            ),
+    local popup = create(
+        "Frame",
+        {
+            AnchorPoint =
+                Vector2.new(
+                    1,
+                    1
+                ),
 
-        Position =
-            UDim2.new(
-                1,
-                0,
-                0,
-                -5
-            ),
+            Position =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    -5
+                ),
 
-        Size =
-            UDim2.fromOffset(
-                230,
-                170
-            ),
+            Size =
+                UDim2.fromOffset(
+                    230,
+                    170
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Background,
+            BackgroundColor3 =
+                self.Theme.Background,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Visible = false,
+            Visible = false,
 
-        ZIndex = 50,
+            ZIndex = 200,
 
-        Parent = card
-    })
+            Parent = card,
+        }
+    )
 
     self:_corner(
         popup,
@@ -3044,72 +3780,81 @@ function Window:AddColorPicker(
         popup
     )
 
-    local popupTitle = create("TextLabel", {
-        Position =
-            UDim2.fromOffset(
-                12,
-                8
-            ),
-
-        Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                20
-            ),
-
-        BackgroundTransparency = 1,
-
-        Text = name,
-
-        TextColor3 =
-            self.Theme.Text,
-
-        TextSize = 11,
-
-        Font =
-            Enum.Font.GothamBold,
-
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
-
-        ZIndex = 51,
-
-        Parent = popup
-    })
-
-    local function colorBox(position, valueText)
-        local box = create("TextBox", {
-            Position = position,
-
-            Size =
+    create(
+        "TextLabel",
+        {
+            Position =
                 UDim2.fromOffset(
-                    62,
-                    28
+                    12,
+                    8
                 ),
 
-            BackgroundColor3 =
-                self.Theme.Card,
+            Size =
+                UDim2.new(
+                    1,
+                    -24,
+                    0,
+                    20
+                ),
 
-            BorderSizePixel = 0,
+            BackgroundTransparency = 1,
 
-            Text = valueText,
+            Text = name,
 
             TextColor3 =
                 self.Theme.Text,
 
-            TextSize = 10,
+            TextSize = 11,
 
             Font =
-                Enum.Font.Gotham,
+                Enum.Font.GothamBold,
 
-            ClearTextOnFocus = false,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-            ZIndex = 51,
+            ZIndex = 201,
 
-            Parent = popup
-        })
+            Parent = popup,
+        }
+    )
+
+    local function colorBox(
+        position,
+        valueText
+    )
+        local box = create(
+            "TextBox",
+            {
+                Position = position,
+
+                Size =
+                    UDim2.fromOffset(
+                        62,
+                        28
+                    ),
+
+                BackgroundColor3 =
+                    self.Theme.Card,
+
+                BorderSizePixel = 0,
+
+                Text = valueText,
+
+                TextColor3 =
+                    self.Theme.Text,
+
+                TextSize = 10,
+
+                Font =
+                    Enum.Font.Gotham,
+
+                ClearTextOnFocus = false,
+
+                ZIndex = 201,
+
+                Parent = popup,
+            }
+        )
 
         self:_corner(
             box,
@@ -3165,76 +3910,82 @@ function Window:AddColorPicker(
             )
         )
 
-    local previewLarge = create("Frame", {
-        Position =
-            UDim2.fromOffset(
-                12,
-                78
-            ),
+    local previewLarge = create(
+        "Frame",
+        {
+            Position =
+                UDim2.fromOffset(
+                    12,
+                    78
+                ),
 
-        Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                30
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    -24,
+                    0,
+                    30
+                ),
 
-        BackgroundColor3 =
-            value,
+            BackgroundColor3 =
+                value,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        ZIndex = 51,
+            ZIndex = 201,
 
-        Parent = popup
-    })
+            Parent = popup,
+        }
+    )
 
     self:_corner(
         previewLarge,
         6
     )
 
-    local apply = create("TextButton", {
-        Position =
-            UDim2.fromOffset(
-                12,
-                118
-            ),
+    local apply = create(
+        "TextButton",
+        {
+            Position =
+                UDim2.fromOffset(
+                    12,
+                    118
+                ),
 
-        Size =
-            UDim2.new(
-                1,
-                -24,
-                0,
-                34
-            ),
+            Size =
+                UDim2.new(
+                    1,
+                    -24,
+                    0,
+                    34
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Accent,
+            BackgroundColor3 =
+                self.Theme.Accent,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Text = "Apply",
+            Text = "Apply",
 
-        TextColor3 =
-            Color3.new(
-                1,
-                1,
-                1
-            ),
+            TextColor3 =
+                Color3.new(
+                    1,
+                    1,
+                    1
+                ),
 
-        TextSize = 11,
+            TextSize = 11,
 
-        Font =
-            Enum.Font.GothamMedium,
+            Font =
+                Enum.Font.GothamMedium,
 
-        AutoButtonColor = false,
+            AutoButtonColor = false,
 
-        ZIndex = 51,
+            ZIndex = 201,
 
-        Parent = popup
-    })
+            Parent = popup,
+        }
+    )
 
     self:_corner(
         apply,
@@ -3243,7 +3994,7 @@ function Window:AddColorPicker(
 
     local function readColor()
         local r =
-            math.clamp(
+            clampNumber(
                 tonumber(red.Text)
                     or 255,
                 0,
@@ -3251,7 +4002,7 @@ function Window:AddColorPicker(
             )
 
         local g =
-            math.clamp(
+            clampNumber(
                 tonumber(green.Text)
                     or 255,
                 0,
@@ -3259,7 +4010,7 @@ function Window:AddColorPicker(
             )
 
         local b =
-            math.clamp(
+            clampNumber(
                 tonumber(blue.Text)
                     or 255,
                 0,
@@ -3334,7 +4085,8 @@ function Window:AddColorPicker(
                         popup
                     )
 
-                    popup.Visible = true
+                    popup.Visible =
+                        true
                 end
             end
         )
@@ -3347,7 +4099,9 @@ function Window:AddColorPicker(
             return value
         end,
 
-        Set = function(newValue)
+        Set = function(
+            newValue
+        )
             if typeof(newValue)
                 ~= "Color3" then
                 return
@@ -3392,7 +4146,11 @@ function Window:AddColorPicker(
         Card = card,
         Button = button,
         Popup = popup,
-        Preview = preview
+        Preview = preview,
+
+        Red = red,
+        Green = green,
+        Blue = blue,
     }
 
     return self:_registerControl(
@@ -3418,12 +4176,11 @@ function Window:AddKeybind(
             ""
         )
 
-    local listening =
-        false
+    local listening = false
 
     local function refresh()
         button.Text =
-            name
+            tostring(name)
             .. ": "
             .. (
                 current
@@ -3445,6 +4202,23 @@ function Window:AddKeybind(
         refresh()
     end
 
+    local function beginListening()
+        if listening
+            or self._keybindListening
+            or self.Destroyed then
+            return
+        end
+
+        listening = true
+
+        self._keybindListening =
+            name
+
+        button.Text =
+            tostring(name)
+            .. ": Press key..."
+    end
+
     refresh()
 
     self:_register(
@@ -3456,53 +4230,43 @@ function Window:AddKeybind(
                     return
                 end
 
-                if self._keybindListening then
+                beginListening()
+            end
+        )
+    )
+
+    self:_register(
+        "KeybindInput_" .. name,
+        UserInputService.InputBegan:Connect(
+            function(input, processed)
+                if not listening
+                    or self.Destroyed then
                     return
                 end
 
-                listening = true
-                self._keybindListening =
-                    name
+                if processed then
+                    return
+                end
 
-                button.Text =
-                    name
-                    .. ": Press key..."
+                if input.UserInputType
+                    ~= Enum.UserInputType.Keyboard then
+                    return
+                end
 
-                task.spawn(function()
-                    while listening
-                        and not self.Destroyed do
+                if input.KeyCode
+                    == Enum.KeyCode.Unknown then
+                    return
+                end
 
-                        local input =
-                            UserInputService.InputBegan:Wait()
+                current =
+                    input.KeyCode
 
-                        if not listening
-                            or self.Destroyed then
-                            break
-                        end
+                stopListening()
 
-                        if input.UserInputType
-                            ~= Enum.UserInputType.Keyboard then
-                            continue
-                        end
-
-                        if input.KeyCode
-                            == Enum.KeyCode.Unknown then
-                            continue
-                        end
-
-                        current =
-                            input.KeyCode
-
-                        stopListening()
-
-                        safeCallback(
-                            callback,
-                            current
-                        )
-
-                        break
-                    end
-                end)
+                safeCallback(
+                    callback,
+                    current
+                )
             end
         )
     )
@@ -3514,7 +4278,9 @@ function Window:AddKeybind(
             return current
         end,
 
-        Set = function(key)
+        Set = function(
+            key
+        )
             if key ~= nil
                 and typeof(key)
                     ~= "EnumItem" then
@@ -3533,7 +4299,15 @@ function Window:AddKeybind(
         end,
 
         Button = button,
-        Card = button
+        Card = button,
+
+        IsListening = function()
+            return listening
+        end,
+
+        Cancel = function()
+            stopListening()
+        end,
     }
 
     return self:_registerControl(
@@ -3547,35 +4321,38 @@ function Window:AddLabel(
     section,
     text
 )
-    local label = create("TextLabel", {
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                28
-            ),
+    local label = create(
+        "TextLabel",
+        {
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    28
+                ),
 
-        BackgroundTransparency = 1,
+            BackgroundTransparency = 1,
 
-        Font =
-            Enum.Font.Gotham,
+            Font =
+                Enum.Font.Gotham,
 
-        Text = text,
+            Text = text,
 
-        TextColor3 =
-            self.Theme.MutedText,
+            TextColor3 =
+                self.Theme.MutedText,
 
-        TextSize = 10,
+            TextSize = 10,
 
-        TextWrapped = true,
+            TextWrapped = true,
 
-        TextXAlignment =
-            Enum.TextXAlignment.Left,
+            TextXAlignment =
+                Enum.TextXAlignment.Left,
 
-        Parent =
-            section.Content
-    })
+            Parent =
+                section.Content,
+        }
+    )
 
     return label
 end
@@ -3583,36 +4360,50 @@ end
 function Window:AddDivider(
     section
 )
-    local divider = create("Frame", {
-        Size =
-            UDim2.new(
-                1,
-                0,
-                0,
-                1
-            ),
+    local divider = create(
+        "Frame",
+        {
+            Size =
+                UDim2.new(
+                    1,
+                    0,
+                    0,
+                    1
+                ),
 
-        BackgroundColor3 =
-            self.Theme.Border,
+            BackgroundColor3 =
+                self.Theme.Border,
 
-        BorderSizePixel = 0,
+            BorderSizePixel = 0,
 
-        Parent =
-            section.Content
-    })
+            Parent =
+                section.Content,
+        }
+    )
 
     return divider
 end
 
-function Window:_updateControlVisibility(control, visible)
-    control.Visible = visible
+function Window:_updateControlVisibility(
+    control,
+    visible
+)
+    if not control then
+        return
+    end
+
+    control.Visible =
+        visible == true
 
     if control.Card then
-        control.Card.Visible = visible
+        control.Card.Visible =
+            control.Visible
     end
 end
 
-function Window:Search(query)
+function Window:Search(
+    query
+)
     query =
         tostring(
             query or ""
@@ -3621,7 +4412,9 @@ function Window:Search(query)
     self._searchQuery =
         query
 
-    for _, tab in pairs(self.Tabs) do
+    for _, tab in pairs(
+        self.Tabs
+    ) do
         local tabMatch =
             query == ""
             or containsText(
@@ -3641,7 +4434,8 @@ function Window:Search(query)
                     self.Options.SearchSections
                     and (
                         containsText(
-                            section.Title.Text,
+                            section.Title
+                                and section.Title.Text,
                             query
                         )
                         or (
@@ -3657,40 +4451,32 @@ function Window:Search(query)
             local anyControlMatch =
                 false
 
-            if self.Options.SearchControls
-                and query ~= "" then
-
-                for _, control in ipairs(
-                    section.Controls
-                ) do
-                    local matches =
-                        containsText(
-                            control.Name,
-                            query
+            for _, control in ipairs(
+                section.Controls
+            ) do
+                local matches =
+                    query == ""
+                    or (
+                        self.Options.SearchControls
+                        and (
+                            containsText(
+                                control.Name,
+                                query
+                            )
+                            or containsText(
+                                control.Description,
+                                query
+                            )
                         )
-                        or containsText(
-                            control.Description,
-                            query
-                        )
-
-                    self:_updateControlVisibility(
-                        control,
-                        matches
                     )
 
-                    if matches then
-                        anyControlMatch =
-                            true
-                    end
-                end
-            else
-                for _, control in ipairs(
-                    section.Controls
-                ) do
-                    self:_updateControlVisibility(
-                        control,
-                        true
-                    )
+                self:_updateControlVisibility(
+                    control,
+                    matches
+                )
+
+                if matches then
+                    anyControlMatch = true
                 end
             end
 
@@ -3705,8 +4491,7 @@ function Window:Search(query)
                 sectionMatch
 
             if sectionMatch then
-                anySectionMatch =
-                    true
+                anySectionMatch = true
             end
         end
 
@@ -3732,99 +4517,118 @@ function Window:GetSearchQuery()
     return self._searchQuery
 end
 
-function Window:SetTheme(theme)
+function Window:SetTheme(
+    theme
+)
     if type(theme) ~= "table" then
-        return
+        return false
     end
 
-    for key, value in pairs(theme) do
+    for key, value in pairs(
+        theme
+    ) do
         if self.Theme[key] ~= nil then
             self.Theme[key] = value
         end
     end
 
+    self:_refreshTheme()
+
+    return true
+end
+
+function Window:_refreshTheme()
+    if self.Destroyed then
+        return
+    end
+
+    local theme =
+        self.Theme
+
     if self.Main then
         self.Main.BackgroundColor3 =
-            self.Theme.Background
+            theme.Background
     end
 
     if self.Header then
         self.Header.BackgroundColor3 =
-            self.Theme.Secondary
+            theme.Secondary
     end
 
     if self.Sidebar then
         self.Sidebar.BackgroundColor3 =
-            self.Theme.Secondary
+            theme.Secondary
     end
 
     if self.HeaderAccent then
         self.HeaderAccent.BackgroundColor3 =
-            self.Theme.Accent
+            theme.Accent
     end
 
     if self.Title then
         self.Title.TextColor3 =
-            self.Theme.Text
+            theme.Text
     end
 
     if self.Subtitle then
         self.Subtitle.TextColor3 =
-            self.Theme.MutedText
+            theme.MutedText
     end
 
     if self.Footer then
         self.Footer.TextColor3 =
-            self.Theme.MutedText
+            theme.MutedText
     end
 
     if self.SearchBox then
         self.SearchBox.BackgroundColor3 =
-            self.Theme.Background
+            theme.Background
 
         self.SearchBox.TextColor3 =
-            self.Theme.Text
+            theme.Text
 
         self.SearchBox.PlaceholderColor3 =
-            self.Theme.MutedText
+            theme.MutedText
     end
 
-    for _, tab in pairs(self.Tabs) do
+    for _, tab in pairs(
+        self.Tabs
+    ) do
         tab.Indicator.BackgroundColor3 =
-            self.Theme.Accent
+            theme.Accent
 
         tab.Page.ScrollBarImageColor3 =
-            self.Theme.Accent
+            theme.Accent
 
         tab.Button.BackgroundColor3 =
             tab.Name == self.CurrentTab
-            and self.Theme.Accent
-            or self.Theme.Secondary
+            and theme.Accent
+            or theme.Secondary
 
         tab.Label.TextColor3 =
             tab.Name == self.CurrentTab
             and Color3.new(1, 1, 1)
-            or self.Theme.MutedText
+            or theme.MutedText
 
         tab.Icon.TextColor3 =
             tab.Name == self.CurrentTab
             and Color3.new(1, 1, 1)
-            or self.Theme.MutedText
+            or theme.MutedText
 
         for _, section in ipairs(
             tab.Sections
         ) do
             section.Frame.BackgroundColor3 =
-                self.Theme.Secondary
+                theme.Secondary
 
             if section.Title then
                 section.Title.TextColor3 =
-                    self.Theme.Text
+                    theme.Text
             end
 
             if section.Description then
                 section.Description.TextColor3 =
-                    self.Theme.MutedText
+                    theme.MutedText
             end
 
             for _, control in ipairs(
@@ -3832,17 +4636,51 @@ function Window:SetTheme(theme)
             ) do
                 if control.Label then
                     control.Label.TextColor3 =
-                        self.Theme.Text
+                        theme.Text
+                end
+
+                if control.DescriptionLabel then
+                    control.DescriptionLabel.TextColor3 =
+                        theme.MutedText
                 end
 
                 if control.ValueLabel then
                     control.ValueLabel.TextColor3 =
-                        self.Theme.Accent
+                        theme.Accent
                 end
 
                 if control.Fill then
                     control.Fill.BackgroundColor3 =
-                        self.Theme.Accent
+                        theme.Accent
+                end
+
+                if control.Switch then
+                    if control.Get then
+                        control.Switch.BackgroundColor3 =
+                            control.Get()
+                            and theme.Accent
+                            or theme.Border
+                    end
+                end
+
+                if control.Preview then
+                    -- Preserve the selected color.
+                    -- ColorPicker preview is not theme-colored.
+                end
+
+                if control.Popup then
+                    control.Popup.BackgroundColor3 =
+                        theme.Background
+                end
+
+                if control.Selected then
+                    control.Selected.TextColor3 =
+                        theme.MutedText
+                end
+
+                if control.Arrow then
+                    control.Arrow.TextColor3 =
+                        theme.MutedText
                 end
             end
         end
@@ -3853,63 +4691,42 @@ function Window:SetTheme(theme)
             self.ResizeHandle:GetDescendants()
         ) do
             if child:IsA("Frame")
-                and child.Name:find("ResizeLine") then
+                and child.Name:find(
+                    "ResizeLine",
+                    1,
+                    true
+                ) then
 
                 child.BackgroundColor3 =
-                    self.Theme.MutedText
+                    theme.MutedText
             end
+        end
+    end
+
+    for _, popup in ipairs(
+        self._popups
+    ) do
+        if popup and popup.Parent then
+            popup.BackgroundColor3 =
+                theme.Background
         end
     end
 end
 
-function Window:SetAccent(color)
+function Window:SetAccent(
+    color
+)
     if typeof(color)
         ~= "Color3" then
-        return
+        return false
     end
 
     self.Theme.Accent =
         color
 
-    if self.HeaderAccent then
-        self.HeaderAccent.BackgroundColor3 =
-            color
-    end
+    self:_refreshTheme()
 
-    for _, tab in pairs(
-        self.Tabs
-    ) do
-        tab.Indicator.BackgroundColor3 =
-            color
-
-        tab.Page.ScrollBarImageColor3 =
-            color
-
-        if tab.Name ==
-            self.CurrentTab then
-
-            tab.Button.BackgroundColor3 =
-                color
-        end
-    end
-
-    for _, control in ipairs(
-        self.Controls
-    ) do
-        if control.Type ==
-            "Slider" then
-
-            if control.Fill then
-                control.Fill.BackgroundColor3 =
-                    color
-            end
-
-            if control.ValueLabel then
-                control.ValueLabel.TextColor3 =
-                    color
-            end
-        end
-    end
+    return true
 end
 
 function Window:SetTitle(
@@ -3933,13 +4750,108 @@ function Window:SetTitle(
     end
 end
 
+function Window:_clampPosition()
+    if not self.Main
+        or not self.Gui
+        or not self.Options.ClampToScreen then
+        return
+    end
+
+    local viewport =
+        getViewport(
+            self.Gui
+        )
+
+    local size =
+        self.Main.AbsoluteSize
+
+    if viewport.X <= 0
+        or viewport.Y <= 0 then
+        return
+    end
+
+    local absolute =
+        self.Main.AbsolutePosition
+
+    local centerX =
+        absolute.X
+        + size.X / 2
+
+    local centerY =
+        absolute.Y
+        + size.Y / 2
+
+    local minX =
+        size.X / 2
+
+    local maxX =
+        viewport.X
+        - size.X / 2
+
+    local minY =
+        size.Y / 2
+
+    local maxY =
+        viewport.Y
+        - size.Y / 2
+
+    local targetX =
+        math.clamp(
+            centerX,
+            minX,
+            math.max(
+                minX,
+                maxX
+            )
+        )
+
+    local targetY =
+        math.clamp(
+            centerY,
+            minY,
+            math.max(
+                minY,
+                maxY
+            )
+        )
+
+    local deltaX =
+        targetX - centerX
+
+    local deltaY =
+        targetY - centerY
+
+    if math.abs(deltaX) > 0.01
+        or math.abs(deltaY) > 0.01 then
+
+        local position =
+            self.Main.Position
+
+        self.Main.Position =
+            UDim2.new(
+                position.X.Scale,
+                position.X.Offset
+                    + deltaX,
+                position.Y.Scale,
+                position.Y.Offset
+                    + deltaY
+            )
+
+        if not self.Minimized then
+            self._normalPosition =
+                self.Main.Position
+        end
+    end
+end
+
 function Window:SetVisible(
     visible,
     animate
 )
     if not self.Gui
-        or not self.Main then
-        return
+        or not self.Main
+        or self.Destroyed then
+        return false
     end
 
     animate =
@@ -3959,7 +4871,12 @@ function Window:SetVisible(
                 animate
             )
 
-            return
+            self:_emit(
+                "VisibleChanged",
+                true
+            )
+
+            return true
         end
 
         if not animate
@@ -3968,36 +4885,57 @@ function Window:SetVisible(
             self.Main.Size =
                 self._normalSize
 
+            self:_clampPosition()
+
             self:_emit(
                 "VisibleChanged",
                 true
             )
 
-            return
+            return true
         end
 
-        local originalSize =
+        local targetSize =
             self._normalSize
+
+        local startX =
+            math.max(
+                targetSize.X.Offset * 0.96,
+                self.Options.MinSize.X
+            )
+
+        local startY =
+            math.max(
+                targetSize.Y.Offset * 0.96,
+                self.Options.MinSize.Y
+            )
 
         self.Main.Size =
             UDim2.fromOffset(
-                math.max(
-                    originalSize.X.Offset * 0.96,
-                    self.Options.MinSize.X
-                ),
-                math.max(
-                    originalSize.Y.Offset * 0.96,
-                    self.Options.MinSize.Y
-                )
+                startX,
+                startY
             )
 
-        self:_play(
-            self.Main,
-            {
-                Size =
-                    originalSize
-            }
-        )
+        local tween =
+            self:_play(
+                self.Main,
+                {
+                    Size =
+                        targetSize,
+                }
+            )
+
+        if tween then
+            tween.Completed:Once(
+                function()
+                    if not self.Destroyed
+                        and self.Visible then
+
+                        self:_clampPosition()
+                    end
+                end
+            )
+        end
     else
         if not animate
             or not self.Options.EnableAnimations then
@@ -4010,8 +4948,11 @@ function Window:SetVisible(
                 false
             )
 
-            return
+            return true
         end
+
+        local normalSize =
+            self._normalSize
 
         self:_play(
             self.Main,
@@ -4019,16 +4960,16 @@ function Window:SetVisible(
                 Size =
                     UDim2.fromOffset(
                         math.max(
-                            self._normalSize.X.Offset
+                            normalSize.X.Offset
                                 * 0.96,
                             self.Options.MinSize.X
                         ),
                         math.max(
-                            self._normalSize.Y.Offset
+                            normalSize.Y.Offset
                                 * 0.96,
                             self.Options.MinSize.Y
                         )
-                    )
+                    ),
             }
         )
 
@@ -4053,17 +4994,23 @@ function Window:SetVisible(
         "VisibleChanged",
         targetVisible
     )
+
+    return true
 end
 
-function Window:Show(animate)
-    self:SetVisible(
+function Window:Show(
+    animate
+)
+    return self:SetVisible(
         true,
         animate
     )
 end
 
-function Window:Hide(animate)
-    self:SetVisible(
+function Window:Hide(
+    animate
+)
+    return self:SetVisible(
         false,
         animate
     )
@@ -4071,11 +5018,10 @@ end
 
 function Window:Toggle()
     if self.Minimized then
-        self:Restore()
-        return
+        return self:Restore()
     end
 
-    self:SetVisible(
+    return self:SetVisible(
         not self.Visible
     )
 end
@@ -4088,11 +5034,13 @@ function Window:IsMinimized()
     return self.Minimized
 end
 
-function Window:Minimize(animate)
+function Window:Minimize(
+    animate
+)
     if not self.Main
         or self.Destroyed
         or self.Minimized then
-        return
+        return false
     end
 
     self._normalSize =
@@ -4105,11 +5053,13 @@ function Window:Minimize(animate)
     self.Visible = true
 
     if self.Body then
-        self.Body.Visible = false
+        self.Body.Visible =
+            false
     end
 
     if self.ResizeHandle then
-        self.ResizeHandle.Visible = false
+        self.ResizeHandle.Visible =
+            false
     end
 
     local minimizedSize =
@@ -4120,14 +5070,14 @@ function Window:Minimize(animate)
             self.Options.HeaderHeight
         )
 
-    if animate
-        ~= false
+    if animate ~= false
         and self.Options.EnableAnimations then
 
         self:_play(
             self.Main,
             {
-                Size = minimizedSize
+                Size =
+                    minimizedSize,
             }
         )
     else
@@ -4136,26 +5086,32 @@ function Window:Minimize(animate)
     end
 
     if self.MinimizeButton then
-        self.MinimizeButton.Text = "+"
+        self.MinimizeButton.Text =
+            "+"
     end
 
     self:_emit(
         "Minimized",
         self
     )
+
+    return true
 end
 
-function Window:Restore(animate)
+function Window:Restore(
+    animate
+)
     if not self.Main
         or self.Destroyed
         or not self.Minimized then
-        return
+        return false
     end
 
     self.Minimized = false
 
     if self.Body then
-        self.Body.Visible = true
+        self.Body.Visible =
+            true
     end
 
     if self.ResizeHandle then
@@ -4167,14 +5123,21 @@ function Window:Restore(animate)
         self._normalSize
         or self.Options.Size
 
-    if animate
-        ~= false
+    local targetPosition =
+        self._normalPosition
+        or self.Options.Position
+
+    self.Main.Position =
+        targetPosition
+
+    if animate ~= false
         and self.Options.EnableAnimations then
 
         self:_play(
             self.Main,
             {
-                Size = targetSize
+                Size =
+                    targetSize,
             }
         )
     else
@@ -4182,89 +5145,111 @@ function Window:Restore(animate)
             targetSize
     end
 
-    if self._normalPosition then
-        self.Main.Position =
-            self._normalPosition
+    if self.MinimizeButton then
+        self.MinimizeButton.Text =
+            "—"
     end
 
-    if self.MinimizeButton then
-        self.MinimizeButton.Text = "—"
-    end
+    self:_clampPosition()
 
     self:_emit(
         "Restored",
         self
     )
+
+    return true
 end
 
-function Window:SetPosition(position)
+function Window:SetPosition(
+    position
+)
     if not self.Main
-        or typeof(position) ~= "UDim2" then
+        or typeof(position)
+            ~= "UDim2" then
         return false
     end
 
-    self.Main.Position = position
+    self.Main.Position =
+        position
 
     if not self.Minimized then
-        self._normalPosition = position
+        self._normalPosition =
+            position
+    end
+
+    if self.Options.ClampToScreen then
+        self:_clampPosition()
     end
 
     return true
 end
 
 function Window:GetPosition()
-    if not self.Main then
-        return self._normalPosition
+    if self.Main then
+        return self.Main.Position
     end
 
-    return self.Main.Position
+    return self._normalPosition
 end
 
-function Window:SetSize(size)
+function Window:SetSize(
+    size
+)
     if not self.Main
-        or typeof(size) ~= "UDim2" then
+        or typeof(size)
+            ~= "UDim2" then
         return false
     end
 
     local offset =
         getOffsetSize(size)
 
-    offset = Vector2.new(
-        math.clamp(
+    local finalX =
+        clampNumber(
             offset.X,
             self.Options.MinSize.X,
             self.Options.MaxSize.X
-        ),
-        math.clamp(
+        )
+
+    local finalY =
+        clampNumber(
             offset.Y,
             self.Options.MinSize.Y,
             self.Options.MaxSize.Y
         )
-    )
 
     local finalSize =
         UDim2.fromOffset(
-            offset.X,
-            offset.Y
+            finalX,
+            finalY
         )
 
-    self.Main.Size =
-        finalSize
+    if self.Minimized then
+        self._normalSize =
+            finalSize
+    else
+        self.Main.Size =
+            finalSize
 
-    if not self.Minimized then
         self._normalSize =
             finalSize
     end
+
+    self:_clampPosition()
 
     return true
 end
 
 function Window:GetSize()
-    if not self.Main then
-        return self._normalSize
+    if self.Main then
+        if self.Minimized then
+            return self._normalSize
+        end
+
+        return self.Main.Size
     end
 
-    return self.Main.Size
+    return self._normalSize
 end
 
 function Window:Center()
@@ -4272,135 +5257,161 @@ function Window:Center()
         return false
     end
 
-    self.Main.Position =
+    local position =
         UDim2.fromScale(
             0.5,
             0.5
         )
 
+    self.Main.Position =
+        position
+
     if not self.Minimized then
         self._normalPosition =
-            self.Main.Position
+            position
     end
 
     return true
 end
 
 function Window:BringToFront()
-    if not self.Gui then
+    if not self.Gui
+        or not self.Main then
         return false
     end
 
-    local highest = 0
-
-    for _, child in ipairs(
-        self.Gui:GetChildren()
-    ) do
-        if child:IsA("GuiObject") then
-            highest =
-                math.max(
-                    highest,
-                    child.ZIndex
-                )
-        end
-    end
+    WINDOW_ZINDEX += 1
 
     self.Main.ZIndex =
-        highest + 1
+        WINDOW_ZINDEX
+
+    self:_refreshZIndex()
 
     return true
 end
 
-function Window:_beginDrag(input)
-    if self.Minimized then
+function Window:_refreshZIndex()
+    if not self.Main then
+        return
+    end
+
+    local base =
+        self.Main.ZIndex
+
+    if self.Header then
+        self.Header.ZIndex =
+            base + 1
+    end
+
+    if self.Body then
+        self.Body.ZIndex =
+            base + 1
+    end
+
+    if self.HeaderAccent then
+        self.HeaderAccent.ZIndex =
+            base + 2
+    end
+
+    if self.Title then
+        self.Title.ZIndex =
+            base + 2
+    end
+
+    if self.Subtitle then
+        self.Subtitle.ZIndex =
+            base + 2
+    end
+
+    if self.MinimizeButton then
+        self.MinimizeButton.ZIndex =
+            base + 3
+    end
+
+    if self.SearchBox then
+        self.SearchBox.ZIndex =
+            base + 3
+    end
+
+    if self.Sidebar then
+        self.Sidebar.ZIndex =
+            base + 2
+    end
+
+    if self.PagesContainer then
+        self.PagesContainer.ZIndex =
+            base + 2
+    end
+
+    if self.ResizeHandle then
+        self.ResizeHandle.ZIndex =
+            base + 10
+    end
+end
+
+function Window:_beginDrag(
+    input
+)
+    if self.Minimized
+        or not self.Main
+        or self.Destroyed then
         return
     end
 
     self._dragging =
         true
 
-    self._dragStart =
+    self._dragStartMouse =
         input.Position
 
-    self._startPosition =
+    self._dragStartPosition =
         self.Main.Position
 
     self._normalPosition =
         self.Main.Position
 end
 
-function Window:_makeDraggable(handle)
+function Window:_makeDraggable(
+    handle
+)
     self:_register(
         "DragChanged",
         UserInputService.InputChanged:Connect(
             function(input)
                 if not self._dragging
-                    or self.Destroyed then
+                    or self.Destroyed
+                    or not self.Main then
                     return
                 end
 
                 if input.UserInputType
-                    ~=
-                    Enum.UserInputType.MouseMovement then
+                    ~= Enum.UserInputType.MouseMovement then
                     return
                 end
 
                 local delta =
                     input.Position
-                    - self._dragStart
+                    - self._dragStartMouse
 
                 local start =
-                    self._startPosition
+                    self._dragStartPosition
 
-                local x =
-                    start.X.Offset
-                    + delta.X
-
-                local y =
-                    start.Y.Offset
-                    + delta.Y
-
-                if self.Options.ClampToScreen
-                    and self.Gui then
-
-                    local viewport =
-                        self.Gui.AbsoluteSize
-
-                    local size =
-                        self.Main.AbsoluteSize
-
-                    local halfX =
-                        size.X / 2
-
-                    local halfY =
-                        size.Y / 2
-
-                    x =
-                        math.clamp(
-                            x,
-                            -viewport.X / 2
-                                + halfX,
-                            viewport.X / 2
-                                - halfX
-                        )
-
-                    y =
-                        math.clamp(
-                            y,
-                            -viewport.Y / 2
-                                + halfY,
-                            viewport.Y / 2
-                                - halfY
-                        )
-                end
-
-                self.Main.Position =
+                local target =
                     UDim2.new(
                         start.X.Scale,
-                        x,
+                        start.X.Offset
+                            + delta.X,
                         start.Y.Scale,
-                        y
+                        start.Y.Offset
+                            + delta.Y
                     )
+
+                self.Main.Position =
+                    target
+
+                if self.Options.ClampToScreen then
+                    self:_clampPosition()
+                end
 
                 self._normalPosition =
                     self.Main.Position
@@ -4413,8 +5424,7 @@ function Window:_makeDraggable(handle)
         UserInputService.InputEnded:Connect(
             function(input)
                 if input.UserInputType
-                    ==
-                    Enum.UserInputType.MouseButton1 then
+                    == Enum.UserInputType.MouseButton1 then
 
                     self._dragging =
                         false
@@ -4422,25 +5432,48 @@ function Window:_makeDraggable(handle)
             end
         )
     )
+
+    self:_register(
+        "DragFocus",
+        handle.InputBegan:Connect(
+            function(input)
+                if isInputMouseButton(input) then
+                    self:BringToFront()
+                end
+            end
+        )
+    )
 end
 
-function Window:GetTab(name)
+function Window:GetTab(
+    name
+)
     return self.Tabs[name]
 end
 
-function Window:GetControl(index)
+function Window:GetControl(
+    index
+)
     return self.Controls[index]
 end
 
-function Window:GetControlByName(name)
+function Window:GetControlByName(
+    name
+)
     if not name then
         return nil
     end
 
+    local target =
+        tostring(name):lower()
+
     for _, control in ipairs(
         self.Controls
     ) do
-        if control.Name == name then
+        if tostring(
+            control.Name
+        ):lower() == target then
+
             return control
         end
     end
@@ -4456,33 +5489,57 @@ function Window:GetTabs()
     return self.Tabs
 end
 
+function Window:GetSections()
+    return self.Sections
+end
+
+function Window:GetCurrentTab()
+    if not self.CurrentTab then
+        return nil
+    end
+
+    return self.Tabs[
+        self.CurrentTab
+    ]
+end
+
 function Window:Notify(
     title,
     message
 )
     if not self.Notifications then
-        return
+        return false
     end
 
     if self.Notifications.Info
         and title then
 
-        self.Notifications:Info(
-            title,
-            message
-        )
+        local success =
+            pcall(function()
+                self.Notifications:Info(
+                    title,
+                    message
+                )
+            end)
 
-        return
+        return success
     end
 
     if self.Notifications.Show then
-        self.Notifications:Show(
-            tostring(
-                message
-                or title
-            )
-        )
+        local success =
+            pcall(function()
+                self.Notifications:Show(
+                    tostring(
+                        message
+                        or title
+                    )
+                )
+            end)
+
+        return success
     end
+
+    return false
 end
 
 function Window:Destroy()
@@ -4496,6 +5553,9 @@ function Window:Destroy()
     self.Visible =
         false
 
+    self.Minimized =
+        false
+
     self._dragging =
         false
 
@@ -4507,10 +5567,17 @@ function Window:Destroy()
 
     self:_closePopups()
 
+    self:_emit(
+        "Destroyed",
+        self
+    )
+
     self:_disconnectAll()
 
     if self.Gui then
-        self.Gui:Destroy()
+        pcall(function()
+            self.Gui:Destroy()
+        end)
     end
 
     self.Gui = nil
@@ -4525,19 +5592,35 @@ function Window:Destroy()
     self.Subtitle = nil
     self.Footer = nil
 
-    self.Tabs = {}
-    self.Controls = {}
+    self.HeaderAccent = nil
+    self.MinimizeButton = nil
+    self.ResizeHandle = nil
 
-    self._tabOrder = {}
-    self._popups = {}
+    table.clear(
+        self.Tabs
+    )
+
+    table.clear(
+        self.Controls
+    )
+
+    table.clear(
+        self.Sections
+    )
+
+    table.clear(
+        self._tabOrder
+    )
+
+    table.clear(
+        self._popups
+    )
 
     self.CurrentTab =
         nil
 
-    self:_emit(
-        "Destroyed",
-        self
-    )
+    self._created =
+        false
 end
 
 return Window
