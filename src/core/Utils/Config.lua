@@ -4,11 +4,15 @@
 
     Central configuration system.
 
+    Version:
+        3.1.0
+
     Responsibilities:
         - Default configuration
         - Runtime values
         - Nested paths
         - Feature settings
+        - FeatureManager settings
         - Validation
         - Change listeners
         - Global listeners
@@ -22,6 +26,9 @@
         - Batch updates
         - Diffing
         - Version metadata
+        - Change notifications
+        - Safe restoration
+        - Configuration cloning
 ]]
 
 local Config = {}
@@ -30,11 +37,12 @@ Config.__index = Config
 
 
 
+
 -- Metadata
 
 
 Config.Name = "Config"
-Config.Version = "3.0.0"
+Config.Version = "3.1.0"
 
 Config.Initialized = false
 Config.Locked = false
@@ -52,14 +60,15 @@ Config.MaxHistory = 100
 
 
 
+
 -- Defaults
 
 
 Config.Defaults = {
 
-    --====================================================--
+    --================================================--
     -- General
-    --====================================================--
+    --================================================--
 
     General = {
         Enabled = true,
@@ -68,9 +77,9 @@ Config.Defaults = {
     },
 
 
-    --====================================================--
+    --================================================--
     -- ESP
-    --====================================================--
+    --================================================--
 
     ESP = {
         Enabled = false,
@@ -96,9 +105,9 @@ Config.Defaults = {
     },
 
 
-    --====================================================--
+    --================================================--
     -- Movement
-    --====================================================--
+    --================================================--
 
     Movement = {
         Enabled = false,
@@ -121,9 +130,9 @@ Config.Defaults = {
     },
 
 
-    --====================================================--
+    --================================================--
     -- Teleports
-    --====================================================--
+    --================================================--
 
     Teleports = {
         Enabled = true,
@@ -132,9 +141,9 @@ Config.Defaults = {
     },
 
 
-    --====================================================--
+    --================================================--
     -- Game Features
-    --====================================================--
+    --================================================--
 
     GameFeatures = {
         Enabled = false,
@@ -153,9 +162,26 @@ Config.Defaults = {
     },
 
 
-    --====================================================--
+    --================================================--
+    -- Feature Manager
+    --================================================--
+
+    FeatureManager = {
+        AutoStart = false,
+
+        SafeMode = true,
+
+        StopDependents = true,
+
+        LogLifecycle = true,
+
+        EmitSignals = true,
+    },
+
+
+    --================================================--
     -- UI
-    --====================================================--
+    --================================================--
 
     UI = {
         Enabled = true,
@@ -169,6 +195,7 @@ Config.Defaults = {
         ToggleKey = Enum.KeyCode.RightShift,
     },
 }
+
 
 
 
@@ -264,6 +291,14 @@ local function GetPathFromTable(
     root,
     path
 )
+
+    if path == nil then
+        return nil
+    end
+
+    if path == "" then
+        return root
+    end
 
     local parts =
         SplitPath(path)
@@ -418,6 +453,41 @@ local function TypeName(value)
 end
 
 
+local function GetPrefixPaths(path)
+
+    local paths = {}
+
+    local parts =
+        SplitPath(path)
+
+    if #parts == 0 then
+        return paths
+    end
+
+    local current = ""
+
+    for _, part in ipairs(parts) do
+
+        if current == "" then
+            current = part
+        else
+            current =
+                current
+                .. "."
+                .. part
+        end
+
+        table.insert(
+            paths,
+            current
+        )
+    end
+
+    return paths
+end
+
+
+
 
 -- Events
 
@@ -433,8 +503,21 @@ function Config:_FireListeners(
         return
     end
 
+    local callbacks =
+        {}
+
     for _, callback in ipairs(
         listeners
+    ) do
+
+        table.insert(
+            callbacks,
+            callback
+        )
+    end
+
+    for _, callback in ipairs(
+        callbacks
     ) do
 
         if type(callback) == "function" then
@@ -442,7 +525,8 @@ function Config:_FireListeners(
             task.spawn(
                 function()
 
-                    local success, errorMessage =
+                    local success,
+                        errorMessage =
                         pcall(
                             callback,
                             newValue,
@@ -491,6 +575,123 @@ function Config:_FireChanged(
 end
 
 
+function Config:_FireAllChanged(
+    oldValues,
+    newValues
+)
+
+    local paths = {}
+
+    local function Collect(
+        current,
+        previous,
+        prefix
+    )
+
+        if type(current) ~= "table"
+            and type(previous) ~= "table" then
+
+            if not ValuesEqual(
+                current,
+                previous
+            ) then
+
+                paths[prefix] = true
+            end
+
+            return
+        end
+
+        local keys = {}
+
+        if type(current) == "table" then
+            for key in pairs(current) do
+                keys[key] = true
+            end
+        end
+
+        if type(previous) == "table" then
+            for key in pairs(previous) do
+                keys[key] = true
+            end
+        end
+
+        for key in pairs(keys) do
+
+            local path
+
+            if prefix == "" then
+                path = tostring(key)
+            else
+                path =
+                    prefix
+                    .. "."
+                    .. tostring(key)
+            end
+
+            local currentValue
+
+            local previousValue
+
+            if type(current) == "table" then
+                currentValue =
+                    current[key]
+            end
+
+            if type(previous) == "table" then
+                previousValue =
+                    previous[key]
+            end
+
+            if type(currentValue) == "table"
+                or type(previousValue) == "table" then
+
+                Collect(
+                    currentValue,
+                    previousValue,
+                    path
+                )
+
+            elseif not ValuesEqual(
+                currentValue,
+                previousValue
+            ) then
+
+                paths[path] = true
+            end
+        end
+    end
+
+    Collect(
+        newValues,
+        oldValues,
+        ""
+    )
+
+    for path in pairs(paths) do
+
+        self:_FireChanged(
+            path,
+            GetPathFromTable(
+                newValues,
+                path
+            ),
+            GetPathFromTable(
+                oldValues,
+                path
+            )
+        )
+    end
+
+    self:_FireChanged(
+        "*",
+        newValues,
+        oldValues
+    )
+end
+
+
+
 
 -- History
 
@@ -526,6 +727,7 @@ function Config:_RecordHistory(
         )
     end
 end
+
 
 
 
@@ -569,6 +771,7 @@ function Config:_EnsureInitialized()
         self:Initialize()
     end
 end
+
 
 
 
@@ -619,6 +822,7 @@ end
 
 
 
+
 -- Schema
 
 
@@ -665,20 +869,62 @@ function Config:RemoveSchema(path)
 end
 
 
+function Config:_FindSchema(path)
+
+    local exact =
+        self.Schema[path]
+
+    if exact then
+        return exact
+    end
+
+    local bestSchema = nil
+    local bestLength = 0
+
+    for schemaPath, schema in pairs(
+        self.Schema
+    ) do
+
+        local prefix =
+            schemaPath .. "."
+
+        if string.sub(
+            path,
+            1,
+            #prefix
+        ) == prefix then
+
+            if #schemaPath > bestLength then
+
+                bestSchema =
+                    schema
+
+                bestLength =
+                    #schemaPath
+            end
+        end
+    end
+
+    return bestSchema
+end
+
+
 function Config:_ValidateValue(
     path,
     value
 )
 
     local schema =
-        self.Schema[path]
+        self:_FindSchema(path)
 
     if not schema then
         return true
     end
 
 
-    -- Type validation
+    --================================================--
+    -- Type
+    --================================================--
 
     if schema.Type then
 
@@ -699,7 +945,9 @@ function Config:_ValidateValue(
     end
 
 
+    --================================================--
     -- Number limits
+    --================================================--
 
     if type(value) == "number" then
 
@@ -719,7 +967,9 @@ function Config:_ValidateValue(
     end
 
 
+    --================================================--
     -- String length
+    --================================================--
 
     if type(value) == "string" then
 
@@ -739,7 +989,9 @@ function Config:_ValidateValue(
     end
 
 
-    -- Enum values
+    --================================================--
+    -- Enum
+    --================================================--
 
     if schema.Enum then
 
@@ -763,12 +1015,15 @@ function Config:_ValidateValue(
     end
 
 
+    --================================================--
     -- Custom validator
+    --================================================--
 
     if type(schema.Validate) ==
         "function" then
 
-        local success, result =
+        local success,
+            result =
             pcall(
                 schema.Validate,
                 value,
@@ -812,6 +1067,7 @@ end
 
 
 
+
 -- Set
 
 
@@ -835,7 +1091,8 @@ function Config:Set(
     end
 
 
-    local valid, validationError =
+    local valid,
+        validationError =
         self:_ValidateValue(
             path,
             value
@@ -892,6 +1149,7 @@ end
 
 
 
+
 -- Set Many
 
 
@@ -917,7 +1175,8 @@ function Config:SetMany(
 
     for path, value in pairs(values) do
 
-        local success, errorMessage =
+        local success,
+            errorMessage =
             self:Set(
                 path,
                 value
@@ -939,6 +1198,7 @@ function Config:SetMany(
         Failed = failed,
     }
 end
+
 
 
 
@@ -977,6 +1237,7 @@ function Config:SetSection(
         values
     )
 end
+
 
 
 
@@ -1026,6 +1287,7 @@ end
 
 
 
+
 -- Defaults
 
 
@@ -1049,6 +1311,7 @@ end
 
 
 
+
 -- Reset
 
 
@@ -1069,21 +1332,23 @@ function Config:Reset(path)
                 self.Values
             )
 
-        self.Values =
+        local newValues =
             DeepCopy(
                 self.Defaults
             )
 
+        self.Values =
+            newValues
+
         self:_RecordHistory(
             "*",
-            self.Values,
+            newValues,
             oldValues
         )
 
-        self:_FireChanged(
-            "*",
-            self.Values,
-            oldValues
+        self:_FireAllChanged(
+            oldValues,
+            newValues
         )
 
         return true
@@ -1122,6 +1387,7 @@ function Config:ResetAll()
 
     return self:Reset()
 end
+
 
 
 
@@ -1178,6 +1444,7 @@ end
 
 
 
+
 -- Increment / Decrement
 
 
@@ -1222,6 +1489,7 @@ function Config:Decrement(
         -amount
     )
 end
+
 
 
 
@@ -1295,6 +1563,7 @@ end
 
 
 
+
 -- Lock
 
 
@@ -1318,6 +1587,7 @@ function Config:IsLocked()
 
     return self.Locked == true
 end
+
 
 
 
@@ -1351,28 +1621,45 @@ function Config:Restore(
             "Invalid snapshot"
     end
 
+    local valid,
+        errors =
+        self:_ValidateTable(
+            snapshot
+        )
+
+    if not valid then
+
+        return false,
+            errors
+    end
+
     local oldValues =
         DeepCopy(
             self.Values
         )
 
+    local newValues =
+        DeepCopy(
+            snapshot
+        )
+
     self.Values =
-        DeepCopy(snapshot)
+        newValues
 
     self:_RecordHistory(
         "*",
-        self.Values,
+        newValues,
         oldValues
     )
 
-    self:_FireChanged(
-        "*",
-        self.Values,
-        oldValues
+    self:_FireAllChanged(
+        oldValues,
+        newValues
     )
 
     return true
 end
+
 
 
 
@@ -1424,6 +1711,56 @@ function Config:Import(
         values
     )
 end
+
+
+
+
+-- Table Validation
+
+
+function Config:_ValidateTable(
+    values
+)
+
+    local errors = {}
+
+    for path in pairs(
+        self.Schema
+    ) do
+
+        local value =
+            GetPathFromTable(
+                values,
+                path
+            )
+
+        if value ~= nil then
+
+            local valid,
+                errorMessage =
+                self:_ValidateValue(
+                    path,
+                    value
+                )
+
+            if not valid then
+
+                table.insert(
+                    errors,
+                    path
+                        .. ": "
+                        .. tostring(
+                            errorMessage
+                        )
+                )
+            end
+        end
+    end
+
+    return #errors == 0,
+        errors
+end
+
 
 
 
@@ -1479,14 +1816,33 @@ function Config:Diff()
         end
 
 
-        for key, defaultValue
-            in pairs(defaults) do
+        local keys = {}
+
+        for key in pairs(defaults) do
+            keys[key] = true
+        end
+
+        if type(current) == "table" then
+            for key in pairs(current) do
+                keys[key] = true
+            end
+        end
+
+
+        for key in pairs(keys) do
 
             local currentValue
+
+            local defaultValue
 
             if type(current) == "table" then
                 currentValue =
                     current[key]
+            end
+
+            if type(defaults) == "table" then
+                defaultValue =
+                    defaults[key]
             end
 
             local path
@@ -1504,11 +1860,28 @@ function Config:Diff()
                     .. tostring(key)
             end
 
-            Compare(
+            if type(defaultValue) == "table"
+                or type(currentValue) == "table" then
+
+                Compare(
+                    currentValue,
+                    defaultValue,
+                    path
+                )
+
+            elseif not ValuesEqual(
                 currentValue,
-                defaultValue,
-                path
-            )
+                defaultValue
+            ) then
+
+                differences[path] = {
+                    Current =
+                        DeepCopy(currentValue),
+
+                    Default =
+                        DeepCopy(defaultValue),
+                }
+            end
         end
     end
 
@@ -1524,7 +1897,8 @@ end
 
 
 
--- Validation
+
+-- Full Validation
 
 
 function Config:Validate()
@@ -1534,7 +1908,9 @@ function Config:Validate()
     local errors = {}
 
 
+    --================================================--
     -- Schema validation
+    --================================================--
 
     for path in pairs(
         self.Schema
@@ -1545,7 +1921,8 @@ function Config:Validate()
 
         if value ~= nil then
 
-            local valid, errorMessage =
+            local valid,
+                errorMessage =
                 self:_ValidateValue(
                     path,
                     value
@@ -1566,7 +1943,9 @@ function Config:Validate()
     end
 
 
+    --================================================--
     -- ESP
+    --================================================--
 
     local maxDistance =
         self:Get(
@@ -1612,7 +1991,9 @@ function Config:Validate()
     end
 
 
+    --================================================--
     -- Movement
+    --================================================--
 
     local walkSpeed =
         self:Get(
@@ -1674,7 +2055,9 @@ function Config:Validate()
     end
 
 
+    --================================================--
     -- Teleports
+    --================================================--
 
     local offset =
         self:Get(
@@ -1691,7 +2074,9 @@ function Config:Validate()
     end
 
 
+    --================================================--
     -- FOV
+    --================================================--
 
     local fov =
         self:Get(
@@ -1709,7 +2094,9 @@ function Config:Validate()
     end
 
 
+    --================================================--
     -- Update rate
+    --================================================--
 
     local updateRate =
         self:Get(
@@ -1726,9 +2113,84 @@ function Config:Validate()
     end
 
 
+    --================================================--
+    -- Feature Manager
+    --================================================--
+
+    local autoStart =
+        self:Get(
+            "FeatureManager.AutoStart"
+        )
+
+    if type(autoStart) ~= "boolean" then
+
+        table.insert(
+            errors,
+            "FeatureManager.AutoStart must be boolean"
+        )
+    end
+
+
+    local safeMode =
+        self:Get(
+            "FeatureManager.SafeMode"
+        )
+
+    if type(safeMode) ~= "boolean" then
+
+        table.insert(
+            errors,
+            "FeatureManager.SafeMode must be boolean"
+        )
+    end
+
+
+    local stopDependents =
+        self:Get(
+            "FeatureManager.StopDependents"
+        )
+
+    if type(stopDependents) ~= "boolean" then
+
+        table.insert(
+            errors,
+            "FeatureManager.StopDependents must be boolean"
+        )
+    end
+
+
+    local logLifecycle =
+        self:Get(
+            "FeatureManager.LogLifecycle"
+        )
+
+    if type(logLifecycle) ~= "boolean" then
+
+        table.insert(
+            errors,
+            "FeatureManager.LogLifecycle must be boolean"
+        )
+    end
+
+
+    local emitSignals =
+        self:Get(
+            "FeatureManager.EmitSignals"
+        )
+
+    if type(emitSignals) ~= "boolean" then
+
+        table.insert(
+            errors,
+            "FeatureManager.EmitSignals must be boolean"
+        )
+    end
+
+
     return #errors == 0,
         errors
 end
+
 
 
 
@@ -1775,6 +2237,7 @@ function Config:SetMaxHistory(
 
     return true
 end
+
 
 
 
@@ -1829,8 +2292,135 @@ function Config:GetInfo()
 
         MaxHistory =
             self.MaxHistory,
+
+        SchemaCount =
+            self:GetSchemaCount(),
+
+        HistoryCount =
+            #self.History,
     }
 end
+
+
+
+
+-- Schema Diagnostics
+
+
+function Config:GetSchemaCount()
+
+    local count = 0
+
+    for _ in pairs(
+        self.Schema
+    ) do
+
+        count += 1
+    end
+
+    return count
+end
+
+
+function Config:GetSchemas()
+
+    return DeepCopy(
+        self.Schema
+    )
+end
+
+
+
+
+-- Runtime Setting Registration
+
+
+function Config:RegisterSetting(
+    path,
+    defaultValue,
+    schema
+)
+
+    if type(path) ~= "string"
+        or path == "" then
+
+        return false,
+            "Invalid setting path"
+    end
+
+    if self:GetDefault(path) ~= nil then
+
+        return false,
+            "Setting already exists"
+    end
+
+    SetPathInTable(
+        self.Defaults,
+        path,
+        DeepCopy(defaultValue)
+    )
+
+    if not self.Initialized then
+        return true
+    end
+
+    if self:GetRaw(path) == nil then
+
+        SetPathInTable(
+            self.Values,
+            path,
+            DeepCopy(defaultValue)
+        )
+    end
+
+    if schema then
+
+        local success,
+            errorMessage =
+            self:RegisterSchema(
+                path,
+                schema
+            )
+
+        if not success then
+            return false,
+                errorMessage
+        end
+    end
+
+    return true
+end
+
+
+function Config:UnregisterSetting(
+    path
+)
+
+    if type(path) ~= "string"
+        or path == "" then
+
+        return false
+    end
+
+    local removed =
+        RemovePathFromTable(
+            self.Defaults,
+            path
+        )
+
+    if self.Initialized then
+
+        RemovePathFromTable(
+            self.Values,
+            path
+        )
+    end
+
+    self.Schema[path] = nil
+
+    return removed
+end
+
 
 
 
@@ -1888,6 +2478,7 @@ end
 
 
 
+
 -- Get Everything
 
 
@@ -1899,6 +2490,7 @@ function Config:GetAll()
         self.Values
     )
 end
+
 
 
 
@@ -1920,6 +2512,11 @@ function Config:Destroy()
     self.Initialized = false
     self.Locked = false
 end
+
+
+
+
+-- Return
 
 
 return Config

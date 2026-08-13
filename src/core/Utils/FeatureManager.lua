@@ -5,10 +5,11 @@
     Central feature lifecycle manager.
 
     Version:
-        3.0.0
+        3.1.0
 
     Responsibilities:
         - Register features
+        - Unregister features
         - Initialize features
         - Start / stop features
         - Enable / disable individual features
@@ -19,6 +20,7 @@
         - Cleanup
         - Feature dependency support
         - Dependency cycle protection
+        - Dependency ordering
         - Priority ordering
         - Runtime status tracking
         - Registry compatibility
@@ -29,12 +31,14 @@
         - Lifecycle events
         - Feature statistics
         - Dependency diagnostics
+        - Runtime settings
+        - State snapshots
+        - Safe manager destruction
 ]]
-
 
 local FeatureManager = {
     Name = "FeatureManager",
-    Version = "3.0.0",
+    Version = "3.1.0",
 
     Initialized = false,
     Running = false,
@@ -77,6 +81,9 @@ local FeatureManager = {
 
         LogLifecycle = true,
         EmitSignals = true,
+
+        AutoEnableDependencies = true,
+        DependencyFailureStopsFeature = true,
     },
 }
 
@@ -86,8 +93,8 @@ local FeatureManager = {
 -- Helpers
 
 
-
 local function SafeToString(value)
+
     if value == nil then
         return "nil"
     end
@@ -107,6 +114,7 @@ end
 
 
 local function GetClock()
+
     local success, result =
         pcall(
             os.clock
@@ -121,6 +129,7 @@ end
 
 
 local function NormalizeName(name)
+
     if type(name) ~= "string" then
         return nil
     end
@@ -134,6 +143,7 @@ end
 
 
 local function SafeCall(callback, ...)
+
     if type(callback) ~= "function" then
         return true, nil
     end
@@ -152,10 +162,51 @@ local function SafeCall(callback, ...)
 end
 
 
+local function DeepCopy(value, seen)
+
+    if type(value) ~= "table" then
+        return value
+    end
+
+    seen =
+        seen or {}
+
+    if seen[value] then
+        return seen[value]
+    end
+
+    local copy = {}
+
+    seen[value] = copy
+
+    for key, child in pairs(value) do
+
+        copy[
+            DeepCopy(key, seen)
+        ] =
+            DeepCopy(child, seen)
+    end
+
+    return copy
+end
+
+
+local function Contains(list, value)
+
+    for _, item in ipairs(list) do
+
+        if item == value then
+            return true
+        end
+    end
+
+    return false
+end
+
+
 
 
 -- Logging
-
 
 
 function FeatureManager:_Log(
@@ -163,6 +214,7 @@ function FeatureManager:_Log(
     message,
     ...
 )
+
     if not self.Settings.LogLifecycle then
         return
     end
@@ -179,12 +231,14 @@ function FeatureManager:_Log(
     end
 
     pcall(function()
+
         loggerMethod(
             self.Logger,
             self.Name,
             message,
             ...
         )
+
     end)
 end
 
@@ -193,6 +247,7 @@ function FeatureManager:_LogDebug(
     message,
     ...
 )
+
     self:_Log(
         "Debug",
         message,
@@ -205,6 +260,7 @@ function FeatureManager:_LogInfo(
     message,
     ...
 )
+
     self:_Log(
         "Info",
         message,
@@ -217,6 +273,7 @@ function FeatureManager:_LogSuccess(
     message,
     ...
 )
+
     self:_Log(
         "Success",
         message,
@@ -229,6 +286,7 @@ function FeatureManager:_LogWarn(
     message,
     ...
 )
+
     self:_Log(
         "Warn",
         message,
@@ -241,6 +299,7 @@ function FeatureManager:_LogError(
     message,
     ...
 )
+
     self:_Log(
         "Error",
         message,
@@ -254,8 +313,8 @@ end
 -- Signals
 
 
-
 local function CreateSignal(signalModule)
+
     if not signalModule then
         return nil
     end
@@ -270,6 +329,7 @@ local function CreateSignal(signalModule)
     for _, constructorName in ipairs(
         constructors
     ) do
+
         local constructor =
             signalModule[constructorName]
 
@@ -281,9 +341,7 @@ local function CreateSignal(signalModule)
                     signalModule
                 )
 
-            if success
-                and signal then
-
+            if success and signal then
                 return signal
             end
 
@@ -292,9 +350,7 @@ local function CreateSignal(signalModule)
                     constructor
                 )
 
-            if success
-                and signal then
-
+            if success and signal then
                 return signal
             end
         end
@@ -305,6 +361,7 @@ end
 
 
 function FeatureManager:_CreateSignals()
+
     self.Signals = {}
 
     if not self.Settings.EmitSignals then
@@ -316,6 +373,7 @@ function FeatureManager:_CreateSignals()
     end
 
     local names = {
+
         "Registered",
         "Unregistered",
 
@@ -344,6 +402,7 @@ function FeatureManager:_CreateSignals()
     }
 
     for _, name in ipairs(names) do
+
         local signal =
             CreateSignal(
                 self.SignalModule
@@ -361,6 +420,7 @@ function FeatureManager:_FireSignal(
     name,
     ...
 )
+
     if not self.Settings.EmitSignals then
         return false
     end
@@ -418,6 +478,7 @@ end
 
 
 function FeatureManager:_DestroySignals()
+
     for _, signal in pairs(
         self.Signals
     ) do
@@ -429,6 +490,7 @@ function FeatureManager:_DestroySignals()
                 or signal.destroy
 
             if type(destroy) == "function" then
+
                 pcall(
                     destroy,
                     signal
@@ -443,13 +505,14 @@ end
 
 
 
--- Feature Statistics
-
+-- Statistics
 
 
 local function CreateFeatureStats()
+
     return {
-        RegisteredAt = GetClock(),
+        RegisteredAt =
+            GetClock(),
 
         InitializedAt = nil,
         EnabledAt = nil,
@@ -475,6 +538,7 @@ function FeatureManager:_Touch(
     record,
     action
 )
+
     if not record
         or not record.Stats then
 
@@ -494,6 +558,7 @@ function FeatureManager:_RecordError(
     message,
     dependencyError
 )
+
     self.Runtime.ErrorCount += 1
 
     if dependencyError then
@@ -501,13 +566,19 @@ function FeatureManager:_RecordError(
     end
 
     if record then
-        record.Error = message
+
+        record.Error =
+            message
 
         if record.Stats then
+
             record.Stats.ErrorCount += 1
-            record.Stats.LastError = message
+
+            record.Stats.LastError =
+                message
 
             if dependencyError then
+
                 record.Stats.DependencyErrorCount += 1
             end
         end
@@ -520,12 +591,12 @@ end
 -- Registration
 
 
-
 function FeatureManager:Register(
     name,
     feature,
     options
 )
+
     name =
         NormalizeName(name)
 
@@ -547,7 +618,10 @@ function FeatureManager:Register(
     end
 
     if self.Features[name] then
-        self:Unregister(name)
+
+        self:Unregister(
+            name
+        )
     end
 
     local dependencies =
@@ -558,8 +632,35 @@ function FeatureManager:Register(
         dependencies = {}
     end
 
-    self.Features[name] = {
+    local normalizedDependencies = {}
+
+    for _, dependency in ipairs(
+        dependencies
+    ) do
+
+        local normalized =
+            NormalizeName(
+                dependency
+            )
+
+        if normalized
+            and normalized ~= name
+            and not Contains(
+                normalizedDependencies,
+                normalized
+            ) then
+
+            table.insert(
+                normalizedDependencies,
+                normalized
+            )
+        end
+    end
+
+    local record = {
+
         Name = name,
+
         Module = feature,
 
         Enabled = false,
@@ -568,7 +669,8 @@ function FeatureManager:Register(
         Status = "Registered",
         Error = nil,
 
-        Dependencies = dependencies,
+        Dependencies =
+            normalizedDependencies,
 
         AutoStart =
             options.AutoStart == true,
@@ -581,6 +683,9 @@ function FeatureManager:Register(
         Stats =
             CreateFeatureStats(),
     }
+
+    self.Features[name] =
+        record
 
     table.insert(
         self.Order,
@@ -595,10 +700,12 @@ function FeatureManager:Register(
         ) == "function" then
 
         pcall(function()
+
             self.Registry:Register(
                 name,
                 feature
             )
+
         end)
     end
 
@@ -610,7 +717,7 @@ function FeatureManager:Register(
     self:_FireSignal(
         "Registered",
         name,
-        self.Features[name]
+        record
     )
 
     self:_FireSignal(
@@ -626,6 +733,7 @@ end
 function FeatureManager:Unregister(
     name
 )
+
     name =
         NormalizeName(name)
 
@@ -640,18 +748,47 @@ function FeatureManager:Unregister(
         return false
     end
 
-    self:Disable(name)
+    local dependents =
+        self:GetDependents(name)
 
-    SafeCall(function()
-        if type(
-            record.Module.Destroy
-        ) == "function" then
+    for _, dependent in ipairs(
+        dependents
+    ) do
 
-            record.Module:Destroy()
+        if self:IsEnabled(dependent) then
+
+            self:Disable(
+                dependent
+            )
         end
-    end)
+    end
+
+    if record.Enabled then
+
+        self:Disable(
+            name
+        )
+    end
+
+    if record.Initialized then
+
+        local module =
+            record.Module
+
+        if type(module.Destroy) ==
+            "function" then
+
+            SafeCall(function()
+                module:Destroy()
+            end)
+        end
+
+        record.Initialized =
+            false
+    end
 
     if record.Stats then
+
         record.Stats.DestroyedAt =
             GetClock()
 
@@ -667,6 +804,7 @@ function FeatureManager:Unregister(
         -1 do
 
         if self.Order[index] == name then
+
             table.remove(
                 self.Order,
                 index
@@ -680,7 +818,11 @@ function FeatureManager:Unregister(
         ) == "function" then
 
         pcall(function()
-            self.Registry:Remove(name)
+
+            self.Registry:Remove(
+                name
+            )
+
         end)
     end
 
@@ -706,6 +848,7 @@ end
 
 
 function FeatureManager:SortOrder()
+
     table.sort(
         self.Order,
         function(a, b)
@@ -740,26 +883,31 @@ end
 -- Context
 
 
-
 function FeatureManager:SetModules(
     modules
 )
+
     if type(modules) ~= "table" then
         return false
     end
 
-    self.Modules = modules
+    self.Modules =
+        modules
 
     return true
 end
 
 
 function FeatureManager:GetModules()
+
     return self.Modules
 end
 
 
-function FeatureManager:GetModule(name)
+function FeatureManager:GetModule(
+    name
+)
+
     if type(name) ~= "string" then
         return nil
     end
@@ -769,17 +917,28 @@ end
 
 
 function FeatureManager:GetContext()
+
     return {
-        Config = self.Config,
-        Connections = self.Connections,
-        Cleanup = self.Cleanup,
+        Config =
+            self.Config,
 
-        Logger = self.Logger,
-        Signal = self.SignalModule,
+        Connections =
+            self.Connections,
 
-        FeatureManager = self,
+        Cleanup =
+            self.Cleanup,
 
-        Modules = self.Modules,
+        Logger =
+            self.Logger,
+
+        Signal =
+            self.SignalModule,
+
+        FeatureManager =
+            self,
+
+        Modules =
+            self.Modules,
     }
 end
 
@@ -789,8 +948,8 @@ end
 -- Queries
 
 
-
 function FeatureManager:Get(name)
+
     local record =
         self.Features[name]
 
@@ -803,16 +962,19 @@ end
 
 
 function FeatureManager:GetRecord(name)
+
     return self.Features[name]
 end
 
 
 function FeatureManager:Has(name)
+
     return self.Features[name] ~= nil
 end
 
 
 function FeatureManager:IsEnabled(name)
+
     local record =
         self.Features[name]
 
@@ -825,6 +987,7 @@ end
 
 
 function FeatureManager:IsInitialized(name)
+
     local record =
         self.Features[name]
 
@@ -837,6 +1000,7 @@ end
 
 
 function FeatureManager:GetNames()
+
     local names = {}
 
     for _, name in ipairs(
@@ -854,6 +1018,7 @@ end
 
 
 function FeatureManager:GetEnabled()
+
     local enabled = {}
 
     for _, name in ipairs(
@@ -878,6 +1043,7 @@ end
 
 
 function FeatureManager:GetStatus(name)
+
     local record =
         self.Features[name]
 
@@ -908,15 +1074,20 @@ function FeatureManager:GetStatus(name)
             record.AutoStart,
 
         Dependencies =
-            record.Dependencies,
+            DeepCopy(
+                record.Dependencies
+            ),
 
         Stats =
-            record.Stats,
+            DeepCopy(
+                record.Stats
+            ),
     }
 end
 
 
 function FeatureManager:GetStatuses()
+
     local statuses = {}
 
     for _, name in ipairs(
@@ -932,6 +1103,7 @@ end
 
 
 function FeatureManager:GetFeatureStats(name)
+
     local record =
         self.Features[name]
 
@@ -939,16 +1111,20 @@ function FeatureManager:GetFeatureStats(name)
         return nil
     end
 
-    return record.Stats
+    return DeepCopy(
+        record.Stats
+    )
 end
 
 
 function FeatureManager:Count()
+
     local count = 0
 
     for _ in pairs(
         self.Features
     ) do
+
         count += 1
     end
 
@@ -961,11 +1137,79 @@ end
 -- Dependency System
 
 
+function FeatureManager:HasDependency(
+    name,
+    dependency
+)
+
+    local record =
+        self.Features[name]
+
+    if not record then
+        return false
+    end
+
+    return Contains(
+        record.Dependencies,
+        dependency
+    )
+end
+
+
+function FeatureManager:GetDependencies(
+    name
+)
+
+    local record =
+        self.Features[name]
+
+    if not record then
+        return {}
+    end
+
+    return DeepCopy(
+        record.Dependencies
+    )
+end
+
+
+function FeatureManager:GetDependents(
+    name
+)
+
+    local dependents = {}
+
+    for _, featureName in ipairs(
+        self.Order
+    ) do
+
+        local record =
+            self.Features[featureName]
+
+        if record then
+
+            if Contains(
+                record.Dependencies,
+                name
+            ) then
+
+                table.insert(
+                    dependents,
+                    featureName
+                )
+            end
+        end
+    end
+
+    return dependents
+end
+
 
 function FeatureManager:DependenciesReady(
     record,
     stack
 )
+
     if not record then
         return false
     end
@@ -976,7 +1220,8 @@ function FeatureManager:DependenciesReady(
     if stack[record.Name] then
 
         local message =
-            "Circular dependency detected"
+            "Circular dependency detected: "
+            .. record.Name
 
         record.Status =
             "DependencyError"
@@ -988,8 +1233,7 @@ function FeatureManager:DependenciesReady(
         )
 
         self:_LogError(
-            "Circular feature dependency:",
-            record.Name
+            message
         )
 
         self:_FireSignal(
@@ -1028,9 +1272,7 @@ function FeatureManager:DependenciesReady(
             )
 
             self:_LogError(
-                "Missing feature dependency:",
-                record.Name,
-                dependency
+                message
             )
 
             self:_FireSignal(
@@ -1045,9 +1287,29 @@ function FeatureManager:DependenciesReady(
             return false
         end
 
+        if dependencyRecord.Name ==
+            record.Name then
+
+            local message =
+                "Feature cannot depend on itself"
+
+            record.Status =
+                "DependencyError"
+
+            self:_RecordError(
+                record,
+                message,
+                true
+            )
+
+            stack[record.Name] = nil
+
+            return false
+        end
+
         if not dependencyRecord.Initialized then
 
-            local success =
+            local success, errorMessage =
                 self:Initialize(
                     dependency,
                     stack
@@ -1059,6 +1321,10 @@ function FeatureManager:DependenciesReady(
                     "Dependency failed: "
                     .. SafeToString(
                         dependency
+                    )
+                    .. " - "
+                    .. SafeToString(
+                        errorMessage
                     )
 
                 record.Status =
@@ -1090,45 +1356,11 @@ function FeatureManager:DependenciesReady(
 end
 
 
-function FeatureManager:GetDependents(
-    name
-)
-    local dependents = {}
-
-    for _, featureName in ipairs(
-        self.Order
-    ) do
-
-        local record =
-            self.Features[featureName]
-
-        if record then
-
-            for _, dependency in ipairs(
-                record.Dependencies
-            ) do
-
-                if dependency == name then
-
-                    table.insert(
-                        dependents,
-                        featureName
-                    )
-
-                    break
-                end
-            end
-        end
-    end
-
-    return dependents
-end
-
-
 function FeatureManager:GetDependencyTree(
     name,
     visited
 )
+
     local record =
         self.Features[name]
 
@@ -1140,6 +1372,7 @@ function FeatureManager:GetDependencyTree(
         visited or {}
 
     if visited[name] then
+
         return {
             Name = name,
             Circular = true,
@@ -1149,6 +1382,7 @@ function FeatureManager:GetDependencyTree(
     visited[name] = true
 
     local result = {
+
         Name = name,
 
         Enabled =
@@ -1174,11 +1408,14 @@ function FeatureManager:GetDependencyTree(
             )
 
         if child then
+
             table.insert(
                 result.Dependencies,
                 child
             )
+
         else
+
             table.insert(
                 result.Dependencies,
                 {
@@ -1195,20 +1432,118 @@ function FeatureManager:GetDependencyTree(
 end
 
 
+function FeatureManager:ValidateDependencies()
+
+    local errors = {}
+
+    for _, name in ipairs(
+        self.Order
+    ) do
+
+        local record =
+            self.Features[name]
+
+        if record then
+
+            local visited = {}
+
+            local function Check(
+                featureName,
+                path
+            )
+
+                if visited[featureName] then
+
+                    table.insert(
+                        errors,
+                        "Circular dependency: "
+                            .. table.concat(
+                                path,
+                                " -> "
+                            )
+                            .. " -> "
+                            .. featureName
+                    )
+
+                    return
+                end
+
+                visited[featureName] = true
+
+                local feature =
+                    self.Features[
+                        featureName
+                    ]
+
+                if not feature then
+
+                    table.insert(
+                        errors,
+                        "Missing dependency: "
+                            .. featureName
+                    )
+
+                    visited[featureName] =
+                        nil
+
+                    return
+                end
+
+                local nextPath = {}
+
+                for _, item in ipairs(path) do
+                    table.insert(
+                        nextPath,
+                        item
+                    )
+                end
+
+                table.insert(
+                    nextPath,
+                    featureName
+                )
+
+                for _, dependency in ipairs(
+                    feature.Dependencies
+                ) do
+
+                    Check(
+                        dependency,
+                        nextPath
+                    )
+                end
+
+                visited[featureName] =
+                    nil
+            end
+
+            Check(
+                name,
+                {}
+            )
+        end
+    end
+
+    return #errors == 0,
+        errors
+end
+
+
 
 
 -- Initialization
-
 
 
 function FeatureManager:Initialize(
     name,
     dependencyStack
 )
+
     local record =
         self.Features[name]
 
     if not record then
+
         return false,
             "Feature not found"
     end
@@ -1217,10 +1552,30 @@ function FeatureManager:Initialize(
         return true
     end
 
+    if record.Status ==
+        "Initializing" then
+
+        local message =
+            "Initialization cycle detected"
+
+        record.Status =
+            "DependencyError"
+
+        self:_RecordError(
+            record,
+            message,
+            true
+        )
+
+        return false,
+            message
+    end
+
     record.Status =
         "Initializing"
 
-    record.Error = nil
+    record.Error =
+        nil
 
     self:_Touch(
         record,
@@ -1233,10 +1588,13 @@ function FeatureManager:Initialize(
         record
     )
 
-    if not self:DependenciesReady(
-        record,
-        dependencyStack
-    ) then
+    local dependenciesReady =
+        self:DependenciesReady(
+            record,
+            dependencyStack
+        )
+
+    if not dependenciesReady then
 
         if record.Status ==
             "Initializing" then
@@ -1259,13 +1617,13 @@ function FeatureManager:Initialize(
             self:GetContext()
 
         local success, result =
-            SafeCall(
-                function()
-                    return module:Initialize(
-                        context
-                    )
-                end
-            )
+            SafeCall(function()
+
+                return module:Initialize(
+                    context
+                )
+
+            end)
 
         if not success then
 
@@ -1342,9 +1700,14 @@ function FeatureManager:Initialize(
         nil
 
     if record.Stats then
+
         record.Stats.InitializeCount += 1
+
         record.Stats.InitializedAt =
             GetClock()
+
+        record.Stats.LastError =
+            nil
     end
 
     self.Runtime.InitializeCount += 1
@@ -1376,13 +1739,17 @@ end
 
 
 function FeatureManager:InitializeAll()
+
     local success = true
 
     for _, name in ipairs(
         self.Order
     ) do
 
-        if not self:Initialize(name) then
+        local initialized =
+            self:Initialize(name)
+
+        if not initialized then
 
             success = false
 
@@ -1405,29 +1772,105 @@ end
 -- Enable / Disable
 
 
-
-function FeatureManager:Enable(name)
-    local record =
-        self.Features[name]
+function FeatureManager:_EnableDependencies(
+    record,
+    stack
+)
 
     if not record then
-        return false,
-            "Feature not found"
+        return false
     end
 
-    if record.Enabled then
+    if not self.Settings.AutoEnableDependencies then
         return true
     end
 
-    if not record.Initialized then
+    stack =
+        stack or {}
 
-        local initialized =
-            self:Initialize(name)
+    if stack[record.Name] then
 
-        if not initialized then
+        return false,
+            "Dependency enable cycle detected"
+    end
+
+    stack[record.Name] = true
+
+    for _, dependency in ipairs(
+        record.Dependencies
+    ) do
+
+        local dependencyRecord =
+            self.Features[dependency]
+
+        if not dependencyRecord then
+
+            stack[record.Name] = nil
+
             return false,
-                record.Error
+                "Missing dependency: "
+                    .. dependency
         end
+
+        local success, errorMessage =
+            self:_EnableDependencies(
+                dependencyRecord,
+                stack
+            )
+
+        if not success then
+
+            stack[record.Name] = nil
+
+            return false,
+                errorMessage
+        end
+
+        if not dependencyRecord.Initialized then
+
+            local initialized =
+                self:Initialize(
+                    dependency
+                )
+
+            if not initialized then
+
+                stack[record.Name] = nil
+
+                return false,
+                    dependencyRecord.Error
+            end
+        end
+
+        if not dependencyRecord.Enabled then
+
+            local enabled, errorMessage =
+                self:_EnableSingle(
+                    dependencyRecord
+                )
+
+            if not enabled then
+
+                stack[record.Name] = nil
+
+                return false,
+                    errorMessage
+            end
+        end
+    end
+
+    stack[record.Name] = nil
+
+    return true
+end
+
+
+function FeatureManager:_EnableSingle(
+    record
+)
+
+    if record.Enabled then
+        return true
     end
 
     local module =
@@ -1446,7 +1889,7 @@ function FeatureManager:Enable(name)
 
     self:_FireSignal(
         "Enabling",
-        name,
+        record.Name,
         record
     )
 
@@ -1454,13 +1897,13 @@ function FeatureManager:Enable(name)
         "function" then
 
         local success, result =
-            SafeCall(
-                function()
-                    return module:SetEnabled(
-                        true
-                    )
-                end
-            )
+            SafeCall(function()
+
+                return module:SetEnabled(
+                    true
+                )
+
+            end)
 
         if not success then
 
@@ -1475,13 +1918,13 @@ function FeatureManager:Enable(name)
 
             self:_LogError(
                 "Failed to enable feature:",
-                name,
+                record.Name,
                 result
             )
 
             self:_FireSignal(
                 "Error",
-                name,
+                record.Name,
                 "Enable",
                 result
             )
@@ -1496,7 +1939,7 @@ function FeatureManager:Enable(name)
                 "Feature rejected enable request"
 
             record.Status =
-                "Disabled"
+                "Initialized"
 
             self:_RecordError(
                 record,
@@ -1506,7 +1949,7 @@ function FeatureManager:Enable(name)
 
             self:_LogWarn(
                 "Feature rejected enable request:",
-                name
+                record.Name
             )
 
             return false,
@@ -1518,7 +1961,9 @@ function FeatureManager:Enable(name)
 
         local success, result =
             SafeCall(function()
+
                 return module:Start()
+
             end)
 
         if not success then
@@ -1534,19 +1979,37 @@ function FeatureManager:Enable(name)
 
             self:_LogError(
                 "Failed to start feature:",
-                name,
+                record.Name,
                 result
             )
 
             self:_FireSignal(
                 "Error",
-                name,
+                record.Name,
                 "Start",
                 result
             )
 
             return false,
                 result
+        end
+
+        if result == false then
+
+            local message =
+                "Feature rejected start request"
+
+            record.Status =
+                "Initialized"
+
+            self:_RecordError(
+                record,
+                message,
+                false
+            )
+
+            return false,
+                message
         end
     end
 
@@ -1560,9 +2023,14 @@ function FeatureManager:Enable(name)
         nil
 
     if record.Stats then
+
         record.Stats.EnableCount += 1
+
         record.Stats.EnabledAt =
             GetClock()
+
+        record.Stats.LastError =
+            nil
     end
 
     self.Runtime.EnableCount += 1
@@ -1574,18 +2042,18 @@ function FeatureManager:Enable(name)
 
     self:_LogSuccess(
         "Enabled feature:",
-        name
+        record.Name
     )
 
     self:_FireSignal(
         "Enabled",
-        name,
+        record.Name,
         record
     )
 
     self:_FireSignal(
         "Changed",
-        name,
+        record.Name,
         "Enabled"
     )
 
@@ -1593,11 +2061,126 @@ function FeatureManager:Enable(name)
 end
 
 
-function FeatureManager:Disable(name)
+function FeatureManager:Enable(
+    name,
+    dependencyStack
+)
+
     local record =
         self.Features[name]
 
     if not record then
+
+        return false,
+            "Feature not found"
+    end
+
+    if record.Enabled then
+        return true
+    end
+
+    if not record.Initialized then
+
+        local initialized =
+            self:Initialize(
+                name
+            )
+
+        if not initialized then
+
+            return false,
+                record.Error
+        end
+    end
+
+    local dependenciesEnabled,
+        dependencyError =
+        self:_EnableDependencies(
+            record,
+            dependencyStack
+        )
+
+    if not dependenciesEnabled then
+
+        local message =
+            dependencyError
+            or "Failed to enable dependencies"
+
+        if self.Settings.DependencyFailureStopsFeature then
+
+            record.Status =
+                "DependencyError"
+
+            self:_RecordError(
+                record,
+                message,
+                true
+            )
+
+            self:_FireSignal(
+                "DependencyError",
+                name,
+                message
+            )
+
+            return false,
+                message
+        end
+    end
+
+    return self:_EnableSingle(
+        record
+    )
+end
+
+
+function FeatureManager:_DisableDependents(
+    name,
+    visited
+)
+
+    visited =
+        visited or {}
+
+    if visited[name] then
+        return
+    end
+
+    visited[name] = true
+
+    local dependents =
+        self:GetDependents(name)
+
+    for _, dependent in ipairs(
+        dependents
+    ) do
+
+        self:_DisableDependents(
+            dependent,
+            visited
+        )
+
+        if self:IsEnabled(dependent) then
+
+            self:Disable(
+                dependent,
+                true
+            )
+        end
+    end
+end
+
+
+function FeatureManager:Disable(
+    name,
+    internal
+)
+
+    local record =
+        self.Features[name]
+
+    if not record then
+
         return false,
             "Feature not found"
     end
@@ -1606,24 +2189,12 @@ function FeatureManager:Disable(name)
         return true
     end
 
-    if self.Settings.StopDependents then
+    if self.Settings.StopDependents
+        and not internal then
 
-        local dependents =
-            self:GetDependents(name)
-
-        for _, dependent in ipairs(
-            dependents
-        ) do
-
-            if self:IsEnabled(
-                dependent
-            ) then
-
-                self:Disable(
-                    dependent
-                )
-            end
-        end
+        self:_DisableDependents(
+            name
+        )
     end
 
     local module =
@@ -1648,9 +2219,11 @@ function FeatureManager:Disable(name)
 
         local success, result =
             SafeCall(function()
+
                 return module:SetEnabled(
                     false
                 )
+
             end)
 
         if not success then
@@ -1687,17 +2260,12 @@ function FeatureManager:Disable(name)
                 "Feature rejected disable request"
 
             record.Status =
-                "Error"
+                "Enabled"
 
             self:_RecordError(
                 record,
                 message,
                 false
-            )
-
-            self:_LogError(
-                "Feature rejected disable request:",
-                name
             )
 
             return false,
@@ -1709,7 +2277,9 @@ function FeatureManager:Disable(name)
 
         local success, result =
             SafeCall(function()
+
                 return module:Stop()
+
             end)
 
         if not success then
@@ -1739,6 +2309,24 @@ function FeatureManager:Disable(name)
             return false,
                 result
         end
+
+        if result == false then
+
+            local message =
+                "Feature rejected stop request"
+
+            record.Status =
+                "Enabled"
+
+            self:_RecordError(
+                record,
+                message,
+                false
+            )
+
+            return false,
+                message
+        end
     end
 
     record.Enabled =
@@ -1751,9 +2339,14 @@ function FeatureManager:Disable(name)
         nil
 
     if record.Stats then
+
         record.Stats.DisableCount += 1
+
         record.Stats.DisabledAt =
             GetClock()
+
+        record.Stats.LastError =
+            nil
     end
 
     self.Runtime.DisableCount += 1
@@ -1785,11 +2378,17 @@ end
 
 
 function FeatureManager:Toggle(name)
+
     if self:IsEnabled(name) then
-        return self:Disable(name)
+
+        return self:Disable(
+            name
+        )
     end
 
-    return self:Enable(name)
+    return self:Enable(
+        name
+    )
 end
 
 
@@ -1798,12 +2397,13 @@ end
 -- Restart
 
 
-
 function FeatureManager:Restart(name)
+
     local record =
         self.Features[name]
 
     if not record then
+
         return false,
             "Feature not found"
     end
@@ -1824,8 +2424,13 @@ function FeatureManager:Restart(name)
 
     if record.Enabled then
 
-        if not self:Disable(name) then
-            return false
+        local disabled =
+            self:Disable(name)
+
+        if not disabled then
+
+            return false,
+                record.Error
         end
     end
 
@@ -1839,7 +2444,9 @@ function FeatureManager:Restart(name)
 
             local success, result =
                 SafeCall(function()
+
                     return module:Destroy()
+
                 end)
 
             if not success then
@@ -1873,27 +2480,34 @@ function FeatureManager:Restart(name)
     end
 
     if record.Stats then
+
         record.Stats.RestartCount += 1
     end
 
     self.Runtime.RestartCount += 1
 
-    local initialized =
+    local initialized,
+        initializeError =
         self:Initialize(name)
 
     if not initialized then
+
         return false,
-            record.Error
+            initializeError
+            or record.Error
     end
 
     if wasEnabled then
 
-        local enabled =
+        local enabled,
+            enableError =
             self:Enable(name)
 
         if not enabled then
+
             return false,
-                record.Error
+                enableError
+                or record.Error
         end
     end
 
@@ -1923,15 +2537,18 @@ end
 -- Bulk Controls
 
 
-
 function FeatureManager:EnableAll()
+
     local success = true
 
     for _, name in ipairs(
         self.Order
     ) do
 
-        if not self:Enable(name) then
+        local enabled =
+            self:Enable(name)
+
+        if not enabled then
 
             success = false
 
@@ -1950,6 +2567,7 @@ end
 
 
 function FeatureManager:DisableAll()
+
     local success = true
 
     for index =
@@ -1960,7 +2578,10 @@ function FeatureManager:DisableAll()
         local name =
             self.Order[index]
 
-        if not self:Disable(name) then
+        if not self:Disable(
+            name
+        ) then
+
             success = false
         end
     end
@@ -1970,6 +2591,7 @@ end
 
 
 function FeatureManager:RestartAll()
+
     local success = true
 
     for index =
@@ -1980,7 +2602,9 @@ function FeatureManager:RestartAll()
         local name =
             self.Order[index]
 
-        if not self:Restart(name) then
+        if not self:Restart(
+            name
+        ) then
 
             success = false
 
@@ -2003,19 +2627,11 @@ end
 -- Runtime
 
 
-
 function FeatureManager:Start()
+
     if self.Running then
         return true
     end
-
-    self.Running =
-        true
-
-    self.Runtime.StartedAt =
-        GetClock()
-
-    self.Runtime.StartCount += 1
 
     self:_LogInfo(
         "Starting FeatureManager"
@@ -2024,6 +2640,39 @@ function FeatureManager:Start()
     self:_FireSignal(
         "Starting"
     )
+
+    local dependencyValid,
+        dependencyErrors =
+        self:ValidateDependencies()
+
+    if not dependencyValid then
+
+        self:_LogError(
+            "Dependency validation failed"
+        )
+
+        for _, errorMessage in ipairs(
+            dependencyErrors
+        ) do
+
+            self:_LogError(
+                errorMessage
+            )
+        end
+
+        if self.Settings.SafeMode then
+
+            self:_FireSignal(
+                "Error",
+                nil,
+                "Dependencies",
+                dependencyErrors
+            )
+
+            return false,
+                dependencyErrors
+        end
+    end
 
     local initialized =
         self:InitializeAll()
@@ -2035,6 +2684,16 @@ function FeatureManager:Start()
             "Some features failed initialization."
         )
     end
+
+    self.Running =
+        true
+
+    self.Runtime.StartedAt =
+        GetClock()
+
+    self.Runtime.StartCount += 1
+
+    local startupSuccess = true
 
     for _, name in ipairs(
         self.Order
@@ -2052,7 +2711,12 @@ function FeatureManager:Start()
                 )
             ) then
 
-            if not self:Enable(name) then
+            local enabled =
+                self:Enable(name)
+
+            if not enabled then
+
+                startupSuccess = false
 
                 if self.Settings.SafeMode then
 
@@ -2065,13 +2729,17 @@ function FeatureManager:Start()
         end
     end
 
+    if not initialized then
+        startupSuccess = false
+    end
+
     self:_LogSuccess(
         "FeatureManager started"
     )
 
     self:_FireSignal(
         "Started",
-        initialized
+        startupSuccess
     )
 
     self:_FireSignal(
@@ -2080,11 +2748,12 @@ function FeatureManager:Start()
         "Started"
     )
 
-    return initialized
+    return startupSuccess
 end
 
 
 function FeatureManager:Stop()
+
     if not self.Running then
         return true
     end
@@ -2132,12 +2801,13 @@ end
 -- Settings
 
 
-
 function FeatureManager:GetSetting(
     name,
     default
 )
+
     if self.Settings[name] ~= nil then
+
         return self.Settings[name]
     end
 
@@ -2147,11 +2817,13 @@ function FeatureManager:GetSetting(
 
         local success, value =
             pcall(function()
+
                 return self.Config:Get(
                     "FeatureManager."
                         .. name,
                     default
                 )
+
             end)
 
         if success then
@@ -2167,6 +2839,7 @@ function FeatureManager:SetSetting(
     name,
     value
 )
+
     if self.Settings[name] == nil then
         return false
     end
@@ -2178,15 +2851,23 @@ function FeatureManager:SetSetting(
 end
 
 
+function FeatureManager:GetSettings()
+
+    return DeepCopy(
+        self.Settings
+    )
+end
+
+
 
 
 -- Logger / Signal Setup
 
 
-
 function FeatureManager:SetLogger(
     logger
 )
+
     self.Logger =
         logger
 
@@ -2197,6 +2878,7 @@ end
 function FeatureManager:SetSignalModule(
     signalModule
 )
+
     self:_DestroySignals()
 
     self.SignalModule =
@@ -2213,8 +2895,8 @@ end
 -- Runtime Diagnostics
 
 
-
 function FeatureManager:GetRuntimeStatus()
+
     return {
         Name =
             self.Name,
@@ -2235,6 +2917,7 @@ function FeatureManager:GetRuntimeStatus()
             #self:GetEnabled(),
 
         Runtime = {
+
             StartedAt =
                 self.Runtime.StartedAt,
 
@@ -2266,27 +2949,16 @@ function FeatureManager:GetRuntimeStatus()
                 self.Runtime.DependencyErrors,
         },
 
-        Settings = {
-            AutoStart =
-                self.Settings.AutoStart,
-
-            SafeMode =
-                self.Settings.SafeMode,
-
-            StopDependents =
-                self.Settings.StopDependents,
-
-            LogLifecycle =
-                self.Settings.LogLifecycle,
-
-            EmitSignals =
-                self.Settings.EmitSignals,
-        },
+        Settings =
+            DeepCopy(
+                self.Settings
+            ),
     }
 end
 
 
 function FeatureManager:GetFullStatus()
+
     return {
         Manager =
             self:GetRuntimeStatus(),
@@ -2303,15 +2975,41 @@ function FeatureManager:GetFullStatus()
 end
 
 
+function FeatureManager:GetDiagnostics()
+
+    local dependencyValid,
+        dependencyErrors =
+        self:ValidateDependencies()
+
+    return {
+        Manager =
+            self:GetRuntimeStatus(),
+
+        DependencyValidation = {
+            Valid =
+                dependencyValid,
+
+            Errors =
+                DeepCopy(
+                    dependencyErrors
+                ),
+        },
+
+        Features =
+            self:GetStatuses(),
+    }
+end
+
+
 
 
 -- Setup
 
 
-
 function FeatureManager:Setup(
     modules
 )
+
     if self.Initialized then
         return self
     end
@@ -2358,12 +3056,13 @@ end
 
 
 
--- Reset
-
+-- Reset Runtime
 
 
 function FeatureManager:ResetRuntime()
+
     self.Runtime = {
+
         StartedAt = nil,
         StoppedAt = nil,
 
@@ -2385,11 +3084,110 @@ end
 
 
 
+-- Snapshot
+
+
+function FeatureManager:Snapshot()
+
+    local snapshot = {
+        Running =
+            self.Running,
+
+        Initialized =
+            self.Initialized,
+
+        Features = {},
+    }
+
+    for _, name in ipairs(
+        self.Order
+    ) do
+
+        local record =
+            self.Features[name]
+
+        if record then
+
+            snapshot.Features[name] = {
+
+                Enabled =
+                    record.Enabled,
+
+                Initialized =
+                    record.Initialized,
+
+                Status =
+                    record.Status,
+            }
+        end
+    end
+
+    return snapshot
+end
+
+
+
+
+-- Restore Snapshot
+
+
+function FeatureManager:RestoreSnapshot(
+    snapshot
+)
+
+    if type(snapshot) ~= "table"
+        or type(snapshot.Features) ~= "table" then
+
+        return false,
+            "Invalid snapshot"
+    end
+
+    local success = true
+
+    for _, name in ipairs(
+        self.Order
+    ) do
+
+        local target =
+            snapshot.Features[name]
+
+        local record =
+            self.Features[name]
+
+        if target and record then
+
+            if target.Enabled then
+
+                if not self:Enable(name) then
+                    success = false
+                end
+
+            else
+
+                if not self:Disable(name) then
+                    success = false
+                end
+            end
+        end
+    end
+
+    return success
+end
+
+
+
+
 -- Cleanup
 
 
-
 function FeatureManager:Destroy()
+
+    if not self.Initialized
+        and self.Count() == 0 then
+
+        return true
+    end
+
     self:_LogInfo(
         "Destroying FeatureManager"
     )
@@ -2409,23 +3207,46 @@ function FeatureManager:Destroy()
 
         if record then
 
-            SafeCall(function()
+            local module =
+                record.Module
 
-                if type(
-                    record.Module.Destroy
-                ) == "function" then
+            if record.Initialized
+                and type(module.Destroy) ==
+                    "function" then
 
-                    record.Module:Destroy()
+                local success, errorMessage =
+                    SafeCall(function()
+
+                        return module:Destroy()
+
+                    end)
+
+                if not success then
+
+                    self:_RecordError(
+                        record,
+                        errorMessage,
+                        false
+                    )
+
+                    self:_LogError(
+                        "Failed to destroy feature:",
+                        name,
+                        errorMessage
+                    )
                 end
-
-            end)
+            end
 
             if record.Stats then
+
                 record.Stats.DestroyedAt =
                     GetClock()
 
                 record.Stats.LastAction =
                     "Destroyed"
+
+                record.Stats.LastActionAt =
+                    GetClock()
             end
 
             record.Initialized =
@@ -2447,8 +3268,11 @@ function FeatureManager:Destroy()
 
     self:_DestroySignals()
 
-    self.Features = {}
-    self.Order = {}
+    self.Features =
+        {}
+
+    self.Order =
+        {}
 
     self.Config =
         nil
