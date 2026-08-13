@@ -1,137 +1,192 @@
-local Config = {
-    Name = "Config",
-    Version = "2.0.0",
+local Config = {}
 
-    Initialized = false,
+Config.__index = Config
 
-    Values = {},
 
-    Defaults = {
-        -- =====================================================
-        -- General
-        -- =====================================================
+-- Metadata
 
-        General = {
-            Enabled = true,
-            Notifications = true,
-            Debug = false,
-        },
 
-        -- =====================================================
-        -- ESP
-        -- =====================================================
+Config.Name = "Config"
+Config.Version = "2.0.0"
 
-        ESP = {
-            Enabled = false,
+Config.Initialized = false
+Config.Locked = false
 
-            Box = true,
-            BoxStyle = "Corner",
+Config.Values = {}
+Config.Defaults = {}
 
-            Name = true,
-            Distance = true,
+Config.Changed = {}
+Config.History = {}
 
-            HealthBar = true,
-            HealthText = false,
+Config.MaxHistory = 100
 
-            Tracer = false,
 
-            Highlight = false,
+-- Defaults
 
-            TeamCheck = false,
 
-            MaxDistance = 1000,
+Config.Defaults = {
 
-            RefreshRate = 30,
-        },
+    -- ========================================================
+    -- General
+    -- ========================================================
 
-        -- =====================================================
-        -- Movement
-        -- =====================================================
+    General = {
+        Enabled = true,
+        Notifications = true,
+        Debug = false,
+    },
 
-        Movement = {
-            Enabled = false,
+    -- ========================================================
+    -- ESP
+    -- ========================================================
 
-            WalkSpeedEnabled = false,
-            WalkSpeed = 16,
+    ESP = {
+        Enabled = false,
 
-            JumpPowerEnabled = false,
-            JumpPower = 50,
+        Box = true,
+        BoxStyle = "Corner",
 
-            JumpHeightEnabled = false,
-            JumpHeight = 7.2,
+        Name = true,
+        Distance = true,
 
-            HipHeightEnabled = false,
-            HipHeight = 2,
+        HealthBar = true,
+        HealthText = false,
 
-            AutoRotateEnabled = true,
+        Tracer = false,
 
-            RestoreOnDisable = true,
-        },
+        Highlight = false,
 
-        -- =====================================================
-        -- Teleports
-        -- =====================================================
+        TeamCheck = false,
 
-        Teleports = {
-            Enabled = true,
+        MaxDistance = 1000,
 
-            OffsetDistance = 4,
-        },
+        RefreshRate = 30,
+    },
 
-        -- =====================================================
-        -- Game Features
-        -- =====================================================
+    -- ========================================================
+    -- Movement
+    -- ========================================================
 
-        GameFeatures = {
-            Enabled = false,
+    Movement = {
+        Enabled = false,
 
-            CameraFOVEnabled = false,
-            CameraFOV = 70,
+        WalkSpeedEnabled = false,
+        WalkSpeed = 16,
 
-            Fullbright = false,
+        JumpPowerEnabled = false,
+        JumpPower = 50,
 
-            ReduceVisualEffects = false,
+        JumpHeightEnabled = false,
+        JumpHeight = 7.2,
 
-            AutoRespawnTracking = true,
-            KeepCharacterReady = true,
+        HipHeightEnabled = false,
+        HipHeight = 2,
 
-            UpdateRate = 30,
-        },
+        AutoRotateEnabled = true,
 
-        -- =====================================================
-        -- UI
-        -- =====================================================
+        RestoreOnDisable = true,
+    },
 
-        UI = {
-            Enabled = true,
+    -- ========================================================
+    -- Teleports
+    -- ========================================================
 
-            Theme = "Default",
+    Teleports = {
+        Enabled = true,
 
-            Notifications = true,
+        OffsetDistance = 4,
+    },
 
-            ShowFeatureStatus = true,
+    -- ========================================================
+    -- Game Features
+    -- ========================================================
 
-            ToggleKey = Enum.KeyCode.RightShift,
-        },
+    GameFeatures = {
+        Enabled = false,
+
+        CameraFOVEnabled = false,
+        CameraFOV = 70,
+
+        Fullbright = false,
+
+        ReduceVisualEffects = false,
+
+        AutoRespawnTracking = true,
+        KeepCharacterReady = true,
+
+        UpdateRate = 30,
+    },
+
+    -- ========================================================
+    -- UI
+    -- ========================================================
+
+    UI = {
+        Enabled = true,
+
+        Theme = "Default",
+
+        Notifications = true,
+
+        ShowFeatureStatus = true,
+
+        ToggleKey = Enum.KeyCode.RightShift,
     },
 }
 
 
--- Internal helpers
+-- Helpers
 
 
-local function DeepCopy(value)
+local function DeepCopy(value, seen)
     if type(value) ~= "table" then
         return value
     end
 
+    seen = seen or {}
+
+    if seen[value] then
+        return seen[value]
+    end
+
     local copy = {}
 
+    seen[value] = copy
+
     for key, child in pairs(value) do
-        copy[key] = DeepCopy(child)
+        copy[
+            DeepCopy(key, seen)
+        ] = DeepCopy(child, seen)
     end
 
     return copy
+end
+
+local function DeepMerge(original, incoming)
+    local result = DeepCopy(original)
+
+    if type(incoming) ~= "table" then
+        return result
+    end
+
+    for key, value in pairs(incoming) do
+
+        if type(value) == "table"
+            and type(result[key]) == "table" then
+
+            result[key] =
+                DeepMerge(
+                    result[key],
+                    value
+                )
+
+        else
+            result[key] =
+                DeepCopy(value)
+        end
+    end
+
+    return result
 end
 
 local function SplitPath(path)
@@ -145,6 +200,7 @@ local function SplitPath(path)
         path,
         "[^%.]+"
     ) do
+
         table.insert(
             parts,
             part
@@ -154,67 +210,38 @@ local function SplitPath(path)
     return parts
 end
 
-
--- Initialization
-
-
-function Config:Initialize()
-    if self.Initialized then
-        return self
-    end
-
-    self.Values =
-        DeepCopy(self.Defaults)
-
-    self.Initialized = true
-
-    return self
+local function JoinPath(parts)
+    return table.concat(parts, ".")
 end
 
-
--- Get
-
-
-function Config:Get(path, default)
-    if not self.Initialized then
-        self:Initialize()
-    end
-
+local function GetPathFromTable(root, path)
     local parts =
         SplitPath(path)
 
     if #parts == 0 then
-        return default
+        return nil
     end
 
-    local current =
-        self.Values
+    local current = root
 
     for _, part in ipairs(parts) do
+
         if type(current) ~= "table" then
-            return default
+            return nil
         end
 
         current =
             current[part]
 
         if current == nil then
-            return default
+            return nil
         end
     end
 
     return current
 end
 
-
--- Set
-
-
-function Config:Set(path, value)
-    if not self.Initialized then
-        self:Initialize()
-    end
-
+local function SetPathInTable(root, path, value)
     local parts =
         SplitPath(path)
 
@@ -222,10 +249,10 @@ function Config:Set(path, value)
         return false
     end
 
-    local current =
-        self.Values
+    local current = root
 
     for index = 1, #parts - 1 do
+
         local part =
             parts[index]
 
@@ -237,28 +264,14 @@ function Config:Set(path, value)
             current[part]
     end
 
-    current[parts[#parts]] =
-        value
+    current[
+        parts[#parts]
+    ] = value
 
     return true
 end
 
-
--- Exists
-
-
-function Config:Has(path)
-    return self:Get(
-        path,
-        nil
-    ) ~= nil
-end
-
-
--- Remove
-
-
-function Config:Remove(path)
+local function RemovePathFromTable(root, path)
     local parts =
         SplitPath(path)
 
@@ -266,10 +279,10 @@ function Config:Remove(path)
         return false
     end
 
-    local current =
-        self.Values
+    local current = root
 
     for index = 1, #parts - 1 do
+
         local part =
             parts[index]
 
@@ -295,16 +308,370 @@ function Config:Remove(path)
     return true
 end
 
+local function ValuesEqual(a, b)
+    if type(a) ~= type(b) then
+        return false
+    end
+
+    if type(a) ~= "table" then
+        return a == b
+    end
+
+    for key, value in pairs(a) do
+        if not ValuesEqual(
+            value,
+            b[key]
+        ) then
+            return false
+        end
+    end
+
+    for key in pairs(b) do
+        if a[key] == nil then
+            return false
+        end
+    end
+
+    return true
+end
+
+
+-- Internal Events
+
+
+function Config:_FireChanged(
+    path,
+    newValue,
+    oldValue
+)
+    local listeners =
+        self.Changed[path]
+
+    if not listeners then
+        return
+    end
+
+    for _, callback in ipairs(listeners) do
+
+        if type(callback) == "function" then
+
+            task.spawn(
+                function()
+
+                    local success, err =
+                        pcall(
+                            callback,
+                            newValue,
+                            oldValue,
+                            path
+                        )
+
+                    if not success
+                        and self:Get(
+                            "General.Debug",
+                            false
+                        ) then
+
+                        warn(
+                            "[Config] Change callback error:",
+                            err
+                        )
+                    end
+
+                end
+            )
+
+        end
+    end
+end
+
+function Config:_RecordHistory(
+    path,
+    newValue,
+    oldValue
+)
+    table.insert(
+        self.History,
+        {
+            Path = path,
+
+            NewValue =
+                DeepCopy(newValue),
+
+            OldValue =
+                DeepCopy(oldValue),
+
+            Time = os.clock(),
+        }
+    )
+
+    while #self.History >
+        self.MaxHistory do
+
+        table.remove(
+            self.History,
+            1
+        )
+    end
+end
+
+
+-- Initialize
+
+
+function Config:Initialize(initialValues)
+    if self.Initialized then
+        return self
+    end
+
+    self.Values =
+        DeepCopy(
+            self.Defaults
+        )
+
+    self.History = {}
+
+    if type(initialValues) == "table" then
+        self.Values =
+            DeepMerge(
+                self.Values,
+                initialValues
+            )
+    end
+
+    self.Initialized = true
+    self.Locked = false
+
+    return self
+end
+
+
+-- Ensure
+
+
+function Config:_EnsureInitialized()
+    if not self.Initialized then
+        self:Initialize()
+    end
+end
+
+
+-- Get
+
+
+function Config:Get(path, default)
+    self:_EnsureInitialized()
+
+    local value =
+        GetPathFromTable(
+            self.Values,
+            path
+        )
+
+    if value == nil then
+        return default
+    end
+
+    return value
+end
+
+
+-- Get Raw
+
+
+function Config:GetRaw(path)
+    self:_EnsureInitialized()
+
+    return GetPathFromTable(
+        self.Values,
+        path
+    )
+end
+
+
+-- Set
+
+
+function Config:Set(path, value)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
+    local oldValue =
+        self:GetRaw(path)
+
+    if ValuesEqual(
+        oldValue,
+        value
+    ) then
+
+        return true
+    end
+
+    local success =
+        SetPathInTable(
+            self.Values,
+            path,
+            DeepCopy(value)
+        )
+
+    if not success then
+        return false, "Invalid path"
+    end
+
+    self:_RecordHistory(
+        path,
+        value,
+        oldValue
+    )
+
+    self:_FireChanged(
+        path,
+        value,
+        oldValue
+    )
+
+    return true
+end
+
+
+-- Set Multiple
+
+
+function Config:SetMany(values)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
+    if type(values) ~= "table" then
+        return false, "Values must be a table"
+    end
+
+    local changed = 0
+
+    for path, value in pairs(values) do
+
+        local success =
+            self:Set(
+                path,
+                value
+            )
+
+        if success then
+            changed += 1
+        end
+    end
+
+    return true, changed
+end
+
+
+-- Has
+
+
+function Config:Has(path)
+    self:_EnsureInitialized()
+
+    return GetPathFromTable(
+        self.Values,
+        path
+    ) ~= nil
+end
+
+
+-- Remove
+
+
+function Config:Remove(path)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
+    local oldValue =
+        self:GetRaw(path)
+
+    if oldValue == nil then
+        return false
+    end
+
+    local success =
+        RemovePathFromTable(
+            self.Values,
+            path
+        )
+
+    if not success then
+        return false
+    end
+
+    self:_RecordHistory(
+        path,
+        nil,
+        oldValue
+    )
+
+    self:_FireChanged(
+        path,
+        nil,
+        oldValue
+    )
+
+    return true
+end
+
+
+-- Defaults
+
+
+function Config:GetDefault(path)
+    return GetPathFromTable(
+        self.Defaults,
+        path
+    )
+end
+
+function Config:GetDefaults()
+    return DeepCopy(
+        self.Defaults
+    )
+end
+
 
 -- Reset
 
 
 function Config:Reset(path)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
     if not path then
+
         self.Values =
             DeepCopy(
                 self.Defaults
             )
+
+        table.insert(
+            self.History,
+            {
+                Path = "*",
+                NewValue =
+                    DeepCopy(
+                        self.Values
+                    ),
+                OldValue = nil,
+                Time = os.clock(),
+            }
+        )
 
         return true
     end
@@ -313,7 +680,7 @@ function Config:Reset(path)
         self:GetDefault(path)
 
     if defaultValue == nil then
-        return false
+        return false, "No default exists"
     end
 
     return self:Set(
@@ -325,34 +692,19 @@ function Config:Reset(path)
 end
 
 
--- Defaults
+-- Reset Section
 
 
-function Config:GetDefault(path)
-    local parts =
-        SplitPath(path)
-
-    if #parts == 0 then
-        return nil
+function Config:ResetSection(section)
+    if type(section) ~= "string" then
+        return false
     end
 
-    local current =
-        self.Defaults
+    return self:Reset(section)
+end
 
-    for _, part in ipairs(parts) do
-        if type(current) ~= "table" then
-            return nil
-        end
-
-        current =
-            current[part]
-
-        if current == nil then
-            return nil
-        end
-    end
-
-    return current
+function Config:ResetAll()
+    return self:Reset()
 end
 
 
@@ -367,39 +719,45 @@ function Config:GetSection(name)
         return nil
     end
 
-    return section
+    return DeepCopy(section)
 end
 
-function Config:SetSection(
-    name,
-    values
-)
+function Config:SetSection(name, values)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
     if type(name) ~= "string"
         or type(values) ~= "table" then
 
         return false
     end
 
+    local oldValue =
+        self:GetRaw(name)
+
     self.Values[name] =
         DeepCopy(values)
+
+    self:_RecordHistory(
+        name,
+        values,
+        oldValue
+    )
+
+    self:_FireChanged(
+        name,
+        values,
+        oldValue
+    )
 
     return true
 end
 
-function Config:GetAll()
-    return DeepCopy(
-        self.Values
-    )
-end
 
-function Config:GetDefaults()
-    return DeepCopy(
-        self.Defaults
-    )
-end
-
-
--- Feature helpers
+-- Feature Helpers
 
 
 function Config:IsFeatureEnabled(
@@ -421,16 +779,344 @@ function Config:SetFeatureEnabled(
     )
 end
 
+function Config:Toggle(featureName)
+    local current =
+        self:IsFeatureEnabled(
+            featureName
+        )
+
+    return self:SetFeatureEnabled(
+        featureName,
+        not current
+    )
+end
+
+
+-- Increment
+
+
+function Config:Increment(
+    path,
+    amount
+)
+    amount = amount or 1
+
+    local current =
+        self:Get(
+            path,
+            0
+        )
+
+    if type(current) ~= "number"
+        or type(amount) ~= "number" then
+
+        return false
+    end
+
+    return self:Set(
+        path,
+        current + amount
+    )
+end
+
+
+-- Change Listeners
+
+
+function Config:OnChanged(
+    path,
+    callback
+)
+    if type(path) ~= "string"
+        or type(callback) ~= "function" then
+
+        return function() end
+    end
+
+    self.Changed[path] =
+        self.Changed[path]
+        or {}
+
+    table.insert(
+        self.Changed[path],
+        callback
+    )
+
+    local removed = false
+
+    return function()
+
+        if removed then
+            return
+        end
+
+        removed = true
+
+        local listeners =
+            self.Changed[path]
+
+        if not listeners then
+            return
+        end
+
+        for index, listener
+            in ipairs(listeners) do
+
+            if listener == callback then
+
+                table.remove(
+                    listeners,
+                    index
+                )
+
+                break
+            end
+        end
+
+        if #listeners == 0 then
+            self.Changed[path] = nil
+        end
+    end
+end
+
+
+-- Global Change Listener
+
+
+function Config:OnAnyChanged(callback)
+    return self:OnChanged(
+        "*",
+        callback
+    )
+end
+
+-- Override event firing for global listeners
+local OriginalFireChanged =
+    Config._FireChanged
+
+function Config:_FireChanged(
+    path,
+    newValue,
+    oldValue
+)
+    OriginalFireChanged(
+        self,
+        path,
+        newValue,
+        oldValue
+    )
+
+    local listeners =
+        self.Changed["*"]
+
+    if not listeners then
+        return
+    end
+
+    for _, callback in ipairs(listeners) do
+
+        if type(callback) == "function" then
+
+            task.spawn(
+                function()
+
+                    pcall(
+                        callback,
+                        newValue,
+                        oldValue,
+                        path
+                    )
+
+                end
+            )
+
+        end
+    end
+end
+
+
+-- Lock
+
+
+function Config:Lock()
+    self.Locked = true
+
+    return self
+end
+
+function Config:Unlock()
+    self.Locked = false
+
+    return self
+end
+
+function Config:IsLocked()
+    return self.Locked == true
+end
+
+
+-- Snapshot
+
+
+function Config:Snapshot()
+    self:_EnsureInitialized()
+
+    return DeepCopy(
+        self.Values
+    )
+end
+
+function Config:Restore(snapshot)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
+    if type(snapshot) ~= "table" then
+        return false, "Invalid snapshot"
+    end
+
+    self.Values =
+        DeepCopy(snapshot)
+
+    return true
+end
+
+
+-- Import / Export
+
+
+function Config:Export()
+    self:_EnsureInitialized()
+
+    return DeepCopy(
+        self.Values
+    )
+end
+
+function Config:Import(values, merge)
+    self:_EnsureInitialized()
+
+    if self.Locked then
+        return false, "Config is locked"
+    end
+
+    if type(values) ~= "table" then
+        return false, "Values must be a table"
+    end
+
+    if merge then
+
+        self.Values =
+            DeepMerge(
+                self.Values,
+                values
+            )
+
+    else
+
+        self.Values =
+            DeepCopy(values)
+
+    end
+
+    return true
+end
+
+
+-- Compare
+
+
+function Config:IsDefault(path)
+    local current =
+        self:GetRaw(path)
+
+    local default =
+        self:GetDefault(path)
+
+    return ValuesEqual(
+        current,
+        default
+    )
+end
+
+function Config:Diff()
+    self:_EnsureInitialized()
+
+    local differences = {}
+
+    local function compare(
+        current,
+        defaults,
+        prefix
+    )
+        if type(defaults) ~= "table" then
+
+            if not ValuesEqual(
+                current,
+                defaults
+            ) then
+
+                differences[prefix] = {
+                    Current =
+                        DeepCopy(current),
+
+                    Default =
+                        DeepCopy(defaults),
+                }
+
+            end
+
+            return
+        end
+
+        for key, defaultValue
+            in pairs(defaults) do
+
+            local currentValue =
+                current
+                and current[key]
+
+            local path
+
+            if prefix == "" then
+                path =
+                    tostring(key)
+            else
+                path =
+                    prefix
+                    .. "."
+                    .. tostring(key)
+            end
+
+            compare(
+                currentValue,
+                defaultValue,
+                path
+            )
+        end
+    end
+
+    compare(
+        self.Values,
+        self.Defaults,
+        ""
+    )
+
+    return differences
+end
+
 
 -- Validation
 
 
 function Config:Validate()
-    if not self.Initialized then
-        self:Initialize()
-    end
+    self:_EnsureInitialized()
 
     local errors = {}
+
+    -- ESP
 
     local maxDistance =
         self:Get(
@@ -460,6 +1146,21 @@ function Config:Validate()
         )
     end
 
+    local boxStyle =
+        self:Get(
+            "ESP.BoxStyle"
+        )
+
+    if type(boxStyle) ~= "string" then
+
+        table.insert(
+            errors,
+            "ESP.BoxStyle must be a string"
+        )
+    end
+
+    -- Movement
+
     local walkSpeed =
         self:Get(
             "Movement.WalkSpeed"
@@ -473,6 +1174,52 @@ function Config:Validate()
             "Movement.WalkSpeed must be >= 0"
         )
     end
+
+    local jumpPower =
+        self:Get(
+            "Movement.JumpPower"
+        )
+
+    if type(jumpPower) ~= "number"
+        or jumpPower < 0 then
+
+        table.insert(
+            errors,
+            "Movement.JumpPower must be >= 0"
+        )
+    end
+
+    local jumpHeight =
+        self:Get(
+            "Movement.JumpHeight"
+        )
+
+    if type(jumpHeight) ~= "number"
+        or jumpHeight < 0 then
+
+        table.insert(
+            errors,
+            "Movement.JumpHeight must be >= 0"
+        )
+    end
+
+    -- Teleports
+
+    local offset =
+        self:Get(
+            "Teleports.OffsetDistance"
+        )
+
+    if type(offset) ~= "number"
+        or offset < 0 then
+
+        table.insert(
+            errors,
+            "Teleports.OffsetDistance must be >= 0"
+        )
+    end
+
+    -- FOV
 
     local fov =
         self:Get(
@@ -489,39 +1236,117 @@ function Config:Validate()
         )
     end
 
+    -- Update rate
+
+    local updateRate =
+        self:Get(
+            "GameFeatures.UpdateRate"
+        )
+
+    if type(updateRate) ~= "number"
+        or updateRate <= 0 then
+
+        table.insert(
+            errors,
+            "GameFeatures.UpdateRate must be > 0"
+        )
+    end
+
     return #errors == 0,
         errors
 end
 
 
--- Utility
+-- History
+
+
+function Config:GetHistory()
+    return DeepCopy(
+        self.History
+    )
+end
+
+function Config:ClearHistory()
+    self.History = {}
+
+    return self
+end
+
+
+-- Clone
 
 
 function Config:Clone()
-    local clone = {
-        Name = self.Name,
-        Version = self.Version,
-        Initialized = true,
+    local clone =
+        setmetatable(
+            {
+                Name = self.Name,
 
-        Defaults =
-            DeepCopy(
-                self.Defaults
-            ),
+                Version = self.Version,
 
-        Values =
-            DeepCopy(
-                self.Values
-            ),
-    }
+                Initialized = self.Initialized,
 
-    setmetatable(
-        clone,
-        {
-            __index = self,
-        }
-    )
+                Locked = false,
+
+                Values =
+                    DeepCopy(
+                        self.Values
+                    ),
+
+                Defaults =
+                    DeepCopy(
+                        self.Defaults
+                    ),
+
+                Changed = {},
+
+                History = {},
+
+                MaxHistory =
+                    self.MaxHistory,
+            },
+            Config
+        )
 
     return clone
+end
+
+
+-- Get Everything
+
+
+function Config:GetAll()
+    self:_EnsureInitialized()
+
+    return DeepCopy(
+        self.Values
+    )
+end
+
+
+-- Set Max History
+
+
+function Config:SetMaxHistory(amount)
+    if type(amount) ~= "number"
+        or amount < 0 then
+
+        return false
+    end
+
+    self.MaxHistory =
+        math.floor(amount)
+
+    while #self.History >
+        self.MaxHistory do
+
+        table.remove(
+            self.History,
+            1
+        )
+    end
+
+    return true
 end
 
 
@@ -530,7 +1355,13 @@ end
 
 function Config:Destroy()
     self.Values = {}
+
+    self.Changed = {}
+
+    self.History = {}
+
     self.Initialized = false
+    self.Locked = false
 end
 
 return Config
