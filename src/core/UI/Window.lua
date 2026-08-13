@@ -1423,10 +1423,18 @@ end
 function Window:_createDefaultTabs()
 
     self:AddTab(
-        "Player",
+        "Visuals",
         {
-            Icon = "P",
+            Icon = "V",
             Order = 1
+        }
+    )
+
+    self:AddTab(
+        "Survivor",
+        {
+            Icon = "S",
+            Order = 2
         }
     )
 
@@ -1434,14 +1442,6 @@ function Window:_createDefaultTabs()
         "Killer",
         {
             Icon = "K",
-            Order = 2
-        }
-    )
-
-    self:AddTab(
-        "Visuals",
-        {
-            Icon = "V",
             Order = 3
         }
     )
@@ -1455,10 +1455,34 @@ function Window:_createDefaultTabs()
     )
 
     self:AddTab(
+        "Camera",
+        {
+            Icon = "C",
+            Order = 5
+        }
+    )
+
+    self:AddTab(
+        "Environment",
+        {
+            Icon = "E",
+            Order = 6
+        }
+    )
+
+    self:AddTab(
+        "Developer",
+        {
+            Icon = "D",
+            Order = 7
+        }
+    )
+
+    self:AddTab(
         "Misc",
         {
             Icon = "X",
-            Order = 5
+            Order = 8
         }
     )
 
@@ -4111,6 +4135,154 @@ end
 -- FEATURE HELPERS
 
 
+function Window:_resolveFeatureKey(featureName)
+    local name = tostring(featureName or "")
+    local normalized = string.lower(name)
+
+    local aliases = {
+        ["player esp"] = "ESP",
+        ["world objects"] = "ESP",
+        ["health bars"] = "ESP",
+        ["distance labels"] = "ESP",
+        ["name labels"] = "ESP",
+        ["fog controls"] = "Visuals",
+        ["shadow controls"] = "Visuals",
+        ["fullbright"] = "Visuals",
+        ["generator assistance"] = "GameFeatures",
+        ["healing assistance"] = "GameFeatures",
+        ["objective automation"] = "GameFeatures",
+        ["exit assistance"] = "GameFeatures",
+        ["teleportation"] = "GameFeatures",
+        ["skill-check assist"] = "GameFeatures",
+        ["perfect skill-chance"] = "GameFeatures",
+        ["anti-fail"] = "GameFeatures",
+        ["combat assistance"] = "Combat",
+        ["target detection"] = "Targeting",
+        ["auto carry"] = "Combat",
+        ["auto hook"] = "Combat",
+        ["hitbox testing"] = "Targeting",
+        ["lunge controls"] = "Combat",
+        ["pallet destruction"] = "GameFeatures",
+        ["survivor teleportation"] = "GameFeatures",
+        ["teleport"] = "GameFeatures",
+        ["free camera"] = "Camera",
+        ["launch / physics"] = "Movement",
+        ["custom coordinates"] = "Movement",
+        ["position reset"] = "Movement",
+        ["third person"] = "Camera",
+        ["fov controls"] = "Camera",
+        ["camera distance"] = "Camera",
+        ["camera angle"] = "Camera",
+        ["camera smoothness"] = "Camera",
+        ["fog"] = "Visuals",
+        ["lighting"] = "Visuals",
+        ["shadows"] = "Visuals",
+        ["ambient"] = "Visuals",
+        ["visibility testing"] = "Visuals",
+        ["field of view"] = "Camera",
+        ["debug modes"] = "GameFeatures",
+        ["physics testing"] = "GameFeatures",
+        ["map exploration"] = "GameFeatures",
+        ["objective testing"] = "GameFeatures",
+        ["endgame testing"] = "GameFeatures",
+        ["diagnostics"] = "GameFeatures",
+        ["utility"] = "GameFeatures",
+        ["settings"] = "Config",
+        ["notifications"] = "Notifications",
+        ["keybinds"] = "Keybinds",
+        ["status"] = "Config",
+    }
+
+    if aliases[normalized] then
+        return aliases[normalized]
+    end
+
+    if name ~= "" then
+        return name
+    end
+
+    return nil
+end
+
+
+function Window:_applyFeatureToggle(featureName, enabled)
+    local mappedFeature = self:_resolveFeatureKey(featureName)
+    if not mappedFeature then
+        return
+    end
+
+    if self.FeatureManager and type(self.FeatureManager.Get) == "function" then
+        local module = self.FeatureManager:Get(mappedFeature)
+
+        if module and type(module.SetFreeCam) == "function" and string.lower(tostring(featureName)) == "free camera" then
+            module:SetFreeCam(enabled)
+            return
+        end
+
+        if module and type(module.SetSpectate) == "function" and string.lower(tostring(featureName)) == "third person" then
+            module:SetSpectate(enabled)
+            return
+        end
+
+        if module and type(module.SetEnabled) == "function" then
+            module:SetEnabled(enabled)
+            return
+        end
+    end
+
+    if self.FeatureManager and type(self.FeatureManager.SetEnabled) == "function" then
+        pcall(function()
+            self.FeatureManager:SetEnabled(mappedFeature, enabled)
+        end)
+    end
+end
+
+
+function Window:_applyFeatureSlider(featureName, settingName, value)
+    local mappedFeature = self:_resolveFeatureKey(featureName)
+    if not mappedFeature then
+        return
+    end
+
+    if self.FeatureManager and type(self.FeatureManager.Get) == "function" then
+        local module = self.FeatureManager:Get(mappedFeature)
+
+        if module and type(module.SetSetting) == "function" then
+            local name = settingName or "Strength"
+            pcall(function()
+                if string.lower(tostring(featureName)) == "field of view" or string.lower(tostring(featureName)) == "camera angle" or string.lower(tostring(featureName)) == "camera distance" or string.lower(tostring(featureName)) == "camera smoothness" then
+                    if name == "Strength" then
+                        if string.lower(tostring(featureName)) == "field of view" then
+                            module:SetSetting("FOV", value)
+                            return
+                        end
+
+                        if string.lower(tostring(featureName)) == "camera distance" then
+                            module:SetSetting("Distance", value)
+                            return
+                        end
+
+                        if string.lower(tostring(featureName)) == "camera smoothness" then
+                            module:SetSetting("Smoothness", value)
+                            return
+                        end
+                    end
+                end
+
+                module:SetSetting(name, value)
+            end)
+            return
+        end
+    end
+
+    if self.FeatureManager and type(self.FeatureManager.UpdateFeatureSetting) == "function" then
+        pcall(function()
+            self.FeatureManager:UpdateFeatureSetting(mappedFeature, settingName or "Strength", value)
+        end)
+    end
+end
+
+
 function Window:AddFeatureToggle(
     tabName,
     section,
@@ -5008,222 +5180,280 @@ function Window:BuildDefaultFeatureLayout(
         features
         or {}
 
-
-    --==========================================================
-    -- PLAYER
-    --==========================================================
-
-    local playerGeneral =
-        self:AddSection(
-            "Player",
-            "Player",
-            {
-                Height = 50,
-                Order = 1
-            }
-        )
+    return self:BuildAdvancedFeatureLayout(features)
+end
 
 
-    local playerVisuals =
-        self:AddSection(
-            "Player",
-            "Player Visuals",
-            {
-                Height = 50,
-                Order = 2
-            }
-        )
+function Window:BuildAdvancedFeatureLayout(
+    features
+)
 
+    features =
+        features
+        or {}
 
-    local playerActions =
-        self:AddSection(
-            "Player",
-            "Player Actions",
-            {
-                Height = 50,
-                Order = 3
-            }
-        )
+    local tabs = {
+        "Visuals",
+        "Survivor",
+        "Killer",
+        "Movement",
+        "Camera",
+        "Environment",
+        "Developer",
+        "Misc",
+    }
 
+    local registry = {
+        Visuals = {
+            "Player ESP",
+            "World Objects",
+            "Health Bars",
+            "Distance Labels",
+            "Name Labels",
+            "Fog Controls",
+            "Shadow Controls",
+            "Fullbright",
+        },
 
-    --==========================================================
-    -- KILLER
-    --==========================================================
-
-    local killerCombat =
-        self:AddSection(
-            "Killer",
-            "Combat",
-            {
-                Height = 50,
-                Order = 1
-            }
-        )
-
-
-    local killerMovement =
-        self:AddSection(
-            "Killer",
-            "Killer Movement",
-            {
-                Height = 50,
-                Order = 2
-            }
-        )
-
-
-    local killerUtility =
-        self:AddSection(
-            "Killer",
-            "Killer Utility",
-            {
-                Height = 50,
-                Order = 3
-            }
-        )
-
-
-    --==========================================================
-    -- VISUALS
-    --==========================================================
-
-    local esp =
-        self:AddSection(
-            "Visuals",
-            "ESP",
-            {
-                Height = 50,
-                Order = 1
-            }
-        )
-
-
-    local world =
-        self:AddSection(
-            "Visuals",
-            "World",
-            {
-                Height = 50,
-                Order = 2
-            }
-        )
-
-
-    local camera =
-        self:AddSection(
-            "Visuals",
-            "Camera",
-            {
-                Height = 50,
-                Order = 3
-            }
-        )
-
-
-    --==========================================================
-    -- MOVEMENT
-    --==========================================================
-
-    local movement =
-        self:AddSection(
-            "Movement",
-            "Movement",
-            {
-                Height = 50,
-                Order = 1
-            }
-        )
-
-
-    local teleport =
-        self:AddSection(
-            "Movement",
-            "Teleport",
-            {
-                Height = 50,
-                Order = 2
-            }
-        )
-
-
-    --==========================================================
-    -- MISC
-    --==========================================================
-
-    local utility =
-        self:AddSection(
-            "Misc",
-            "Utility",
-            {
-                Height = 50,
-                Order = 1
-            }
-        )
-
-
-    local settings =
-        self:AddSection(
-            "Misc",
-            "Settings",
-            {
-                Height = 50,
-                Order = 2
-            }
-        )
-
-
-    -- Return organized containers.
-
-    return {
-
-        Player = {
-
-            Player = playerGeneral,
-
-            Visuals = playerVisuals,
-
-            Actions = playerActions
-
+        Survivor = {
+            "Generator Assistance",
+            "Healing Assistance",
+            "Objective Automation",
+            "Exit Assistance",
+            "Teleportation",
+            "Skill-check Assist",
+            "Perfect Skill-chance",
+            "Anti-fail",
         },
 
         Killer = {
-
-            Combat = killerCombat,
-
-            Movement = killerMovement,
-
-            Utility = killerUtility
-
-        },
-
-        Visuals = {
-
-            ESP = esp,
-
-            World = world,
-
-            Camera = camera
-
+            "Combat Assistance",
+            "Target Detection",
+            "Auto Carry",
+            "Auto Hook",
+            "Hitbox Testing",
+            "Lunge Controls",
+            "Pallet Destruction",
+            "Survivor Teleportation",
         },
 
         Movement = {
+            "Teleport",
+            "Free Camera",
+            "Launch / Physics",
+            "Custom Coordinates",
+            "Position Reset",
+        },
 
-            Movement = movement,
+        Camera = {
+            "Third Person",
+            "FOV Controls",
+            "Camera Distance",
+            "Camera Angle",
+            "Camera Smoothness",
+        },
 
-            Teleport = teleport
+        Environment = {
+            "Fog",
+            "Lighting",
+            "Shadows",
+            "Ambient",
+            "Fullbright",
+            "Visibility Testing",
+            "Field of View",
+        },
 
+        Developer = {
+            "Debug Modes",
+            "Physics Testing",
+            "Map Exploration",
+            "Objective Testing",
+            "Endgame Testing",
+            "Diagnostics",
         },
 
         Misc = {
-
-            Utility = utility,
-
-            Settings = settings
-
-        }
-
+            "Utility",
+            "Settings",
+            "Notifications",
+            "Keybinds",
+            "Status",
+        },
     }
 
+    for _, tabName in ipairs(tabs) do
+        self:AddTab(
+            tabName,
+            {
+                Icon = string.sub(tabName, 1, 1),
+                Order = self.TabOrder and (#self.TabOrder + 1) or 1,
+            }
+        )
+    end
+
+    local sections = {}
+
+    for _, tabName in ipairs(tabs) do
+        local panel = registry[tabName] or {}
+        local container = {}
+
+        for index, featureName in ipairs(panel) do
+            local section = self:AddSection(
+                tabName,
+                featureName,
+                {
+                    Height = 52,
+                    Order = index,
+                }
+            )
+
+            container[featureName] = section
+
+            local mappedFeature = self:_resolveFeatureKey(featureName)
+
+            self:AddToggle(
+                tabName,
+                section,
+                featureName,
+                {
+                    Description = "Advanced module toggle",
+                    Default = false,
+                    Callback = function(enabled)
+                        self:_applyFeatureToggle(featureName, enabled)
+                    end,
+                }
+            )
+
+            self:AddSlider(
+                tabName,
+                section,
+                featureName .. " Strength",
+                {
+                    Min = 0,
+                    Max = 100,
+                    Default = 50,
+                    Description = "Live tuning value",
+                    Callback = function(value)
+                        self:_applyFeatureSlider(featureName, "Strength", value)
+                    end,
+                }
+            )
+        end
+
+        sections[tabName] = container
+    end
+
+    local statusTab = self:GetTab("Misc")
+    if statusTab then
+        local statusSection = self:AddSection(
+            "Misc",
+            "Runtime Status",
+            {
+                Height = 80,
+                Order = 1,
+            }
+        )
+
+        self:AddLabel(
+            "Misc",
+            statusSection,
+            "Framework status: online",
+            {
+                Height = 20,
+                TextSize = 10,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }
+        )
+
+        self:AddLabel(
+            "Misc",
+            statusSection,
+            "UI: advanced feature layout active",
+            {
+                Height = 20,
+                TextSize = 10,
+                TextXAlignment = Enum.TextXAlignment.Left,
+            }
+        )
+    end
+
+    return sections
+end
+
+
+function Window:BuildFeaturePanel(tabName, sectionName, items)
+    items = items or {}
+
+    local section = self:AddSection(
+        tabName,
+        sectionName,
+        {
+            Height = 52 + (math.max(#items, 1) * 36),
+            Order = 1,
+        }
+    )
+
+    for index, item in ipairs(items) do
+        if type(item) == "table" then
+            local name = item.Name or item.Label or "Setting"
+            local defaultValue = item.Default ~= nil and item.Default or false
+
+            if item.Type == "slider" then
+                self:AddSlider(
+                    tabName,
+                    section,
+                    name,
+                    {
+                        Min = item.Min or 0,
+                        Max = item.Max or 100,
+                        Default = item.Default or 0,
+                        Description = item.Description or "",
+                        Callback = item.Callback,
+                    }
+                )
+            else
+                self:AddToggle(
+                    tabName,
+                    section,
+                    name,
+                    {
+                        Description = item.Description or "",
+                        Default = defaultValue,
+                        Callback = item.Callback,
+                    }
+                )
+            end
+        end
+    end
+
+    return section
+end
+
+
+function Window:AddStatusCard(tabName, title, value, color)
+    local section = self:AddSection(
+        tabName,
+        title,
+        {
+            Height = 60,
+            Order = 1,
+        }
+    )
+
+    self:AddLabel(
+        tabName,
+        section,
+        tostring(value or "0"),
+        {
+            Height = 24,
+            TextSize = 12,
+            TextColor = color or self:_accent(),
+            Font = Enum.Font.GothamBold,
+            TextXAlignment = Enum.TextXAlignment.Left,
+        }
+    )
+
+    return section
 end
 
 

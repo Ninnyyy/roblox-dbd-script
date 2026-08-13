@@ -78,6 +78,53 @@ Config.Defaults = {
 
 
     --================================================--
+    -- Visual Awareness
+    --================================================--
+
+    Visuals = {
+        Enabled = true,
+        PlayerESP = true,
+        WorldESP = true,
+        GeneratorESP = true,
+        PalletESP = true,
+        HookESP = true,
+        GateESP = true,
+        ShowNames = true,
+        ShowUsernames = false,
+        ShowTeam = true,
+        ShowDistance = true,
+        ShowHealth = true,
+        ShowMaxHealth = false,
+        ShowHealthBar = true,
+        ShowTracers = false,
+        ShowHighlight = false,
+        MaxDistance = 2000,
+        MinDistance = 0,
+        BoxStyle = "Corner",
+        BoxFill = false,
+        TextOutline = true,
+        UpdateRate = 30,
+    },
+
+    WorldESP = {
+        Enabled = false,
+        Generators = true,
+        Pallets = true,
+        Hooks = true,
+        ExitGates = true,
+        CustomObjects = true,
+        MaxDistance = 2000,
+        MinDistance = 0,
+        NameLabels = true,
+        DistanceLabels = true,
+        ShowIcons = false,
+        DefaultColor = Color3.fromRGB(255, 255, 255),
+        HighlightColor = Color3.fromRGB(255, 200, 80),
+        UpdateRate = 30,
+    },
+
+
+    --================================================--
     -- ESP
     --================================================--
 
@@ -106,7 +153,159 @@ Config.Defaults = {
 
 
     --================================================--
-    -- Movement
+    -- Generator & Objective Assistance
+    --================================================--
+
+    Generators = {
+        Enabled = false,
+        AutoRepair = false,
+        AutoSelectNext = true,
+        RepairSpeed = 1,
+        SkillCheckAssist = false,
+        PerfectSkillCheck = false,
+        AntiFail = true,
+        IgnoreCompleted = true,
+        ShowStatus = true,
+        MaxDistance = 200,
+        UpdateRate = 30,
+    },
+
+    Healing = {
+        Enabled = false,
+        AutoHeal = false,
+        HealSpeed = 1,
+        DetectInjuredOnly = true,
+        SkillCheckAssist = false,
+        PerfectSkillCheck = false,
+        InstantHeal = false,
+        Cooldown = 0.25,
+        MaxDistance = 50,
+        UpdateRate = 30,
+    },
+
+
+    --================================================--
+    -- Teleport & Position System
+    --================================================--
+
+    Teleports = {
+        Enabled = true,
+
+        OffsetDistance = 4,
+        SafeTeleport = true,
+        AllowPlayerTeleport = true,
+        SaveLocations = true,
+        MaxLocations = 100,
+        HistoryEnabled = true,
+        MaxHistory = 20,
+        UseSpawnLocation = true,
+    },
+
+    Teleportation = {
+        Enabled = true,
+        ToGenerators = true,
+        ToExitGates = true,
+        ToSurvivors = true,
+        ToKillers = true,
+        ToHooks = true,
+        ToPallets = true,
+        ToCustomCoords = true,
+        ValidateDestinations = true,
+        SafeFallback = true,
+    },
+
+
+    --================================================--
+    -- Environment & Visibility Controls
+    --================================================--
+
+    Environment = {
+        Enabled = true,
+        FogEnabled = true,
+        FogDensity = 0.5,
+        Darkness = 0.5,
+        ShadowIntensity = 0.5,
+        Brightness = 1,
+        Ambient = 1,
+        FieldOfView = 70,
+        Fullbright = false,
+        ReduceEffects = false,
+        UpdateRate = 30,
+    },
+
+    Visibility = {
+        Enabled = false,
+        LocalCharacterVisible = true,
+        OthersCanSeeLocal = true,
+        FullbrightTesting = false,
+        ShowVisibilityState = false,
+    },
+
+    AntiIdle = {
+        Enabled = false,
+        DetectIdle = true,
+        IdleThreshold = 180,
+        PreventDisconnect = true,
+        SafeBehavior = true,
+        CheckRate = 10,
+    },
+
+
+    --================================================--
+    -- Killer Features
+    --================================================--
+
+    Killer = {
+        Enabled = false,
+        AttackAssist = false,
+        AttackRadius = 20,
+        TargetPriority = "Nearest",
+        AutoAttack = false,
+        AttackCooldown = 0,
+        LungeEnabled = false,
+        LungeDistance = 10,
+        InfiniteLunge = false,
+        ShowHitboxes = false,
+        HitboxSize = 1,
+        DetectionRadius = 30,
+        AutoCarry = false,
+        AutoHook = false,
+        TargetSelectionPriority = "Distance",
+    },
+
+    Hitboxes = {
+        Enabled = false,
+        ShowAttackHitboxes = false,
+        ShowTargetHitboxes = false,
+        DisplayRadius = 20,
+        ExpandAmount = 0,
+        ShowOnScreenOnly = false,
+    },
+
+    SurvivorTargeting = {
+        Enabled = false,
+        DetectionRadius = 30,
+        RequireAlive = true,
+        ShowNearbyTargets = true,
+        SelectionMode = "Nearest",
+        TeamFilter = true,
+        AutoAttackTesting = false,
+    },
+
+    Pallets = {
+        Enabled = false,
+        HighlightPallets = true,
+        ShowDistance = true,
+        AutoInteract = false,
+        InstantDestroy = false,
+        DestroyAll = false,
+        MaxDistance = 100,
+        RefreshRate = 30,
+    },
+
+
+    --================================================--
+    -- Movement & Camera
     --================================================--
 
     Movement = {
@@ -129,36 +328,55 @@ Config.Defaults = {
         RestoreOnDisable = true,
     },
 
-
-    --================================================--
-    -- Teleports
-    --================================================--
-
-    Teleports = {
+    Camera = {
         Enabled = true,
+        ThirdPerson = false,
+        Distance = 10,
+        Height = 2,
+        Angle = 0,
+        Smoothness = 0.2,
+        Sensitivity = 1,
+        KillerSupport = true,
+        PremiumMode = false,
+        Spectate = true,
+        FreeCam = false,
+        FOV = 70,
+        FOVPresets = {
+            Default = 70,
+            Wide = 90,
+            UltraWide = 110,
+        },
+    },
 
-        OffsetDistance = 4,
+    FreeCamera = {
+        Enabled = false,
+        Speed = 60,
+        VerticalSpeed = 40,
+        Collision = false,
+        SavePreviousPosition = true,
+    },
+
+    Physics = {
+        Enabled = false,
+        LaunchForce = 100,
+        LaunchDirection = Vector3.new(0, 1, 0),
+        ResetPosition = false,
+        PreventNormalGameplay = true,
     },
 
 
     --================================================--
-    -- Game Features
+    -- Escape & Endgame
     --================================================--
 
-    GameFeatures = {
+    ExitGates = {
         Enabled = false,
-
-        CameraFOVEnabled = false,
-        CameraFOV = 70,
-
-        Fullbright = false,
-
-        ReduceVisualEffects = false,
-
-        AutoRespawnTracking = true,
-        KeepCharacterReady = true,
-
-        UpdateRate = 30,
+        HighlightGates = true,
+        ShowDistance = true,
+        AutoInteract = false,
+        DetectEscapeConditions = true,
+        EndgameTestingMode = false,
+        MaxDistance = 250,
     },
 
 
@@ -176,6 +394,21 @@ Config.Defaults = {
         LogLifecycle = true,
 
         EmitSignals = true,
+    },
+
+
+    --================================================--
+    -- Developer / Testing
+    --================================================--
+
+    Developer = {
+        Enabled = false,
+        DebugModes = false,
+        ObjectiveTesting = false,
+        PhysicsTesting = false,
+        MapExploration = false,
+        EndgameTesting = false,
+        Diagnostics = true,
     },
 
 

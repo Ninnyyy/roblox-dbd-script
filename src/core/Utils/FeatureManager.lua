@@ -2851,6 +2851,181 @@ function FeatureManager:SetSetting(
 end
 
 
+function FeatureManager:SetEnabled(
+    name,
+    enabled
+)
+
+    name =
+        NormalizeName(name)
+
+    if not name then
+        return false,
+            "Invalid feature name"
+    end
+
+    if enabled == true then
+        return self:Enable(name)
+    end
+
+    return self:Disable(name)
+end
+
+
+function FeatureManager:Toggle(
+    name
+)
+
+    local current =
+        self:IsEnabled(name)
+
+    return self:SetEnabled(
+        name,
+        not current
+    )
+end
+
+
+function FeatureManager:GetFeatureSetting(
+    featureName,
+    settingName,
+    default
+)
+
+    local normalizedFeature =
+        NormalizeName(featureName)
+
+    local normalizedSetting =
+        NormalizeName(settingName)
+
+    if not normalizedFeature
+        or not normalizedSetting then
+
+        return default
+    end
+
+    if self.Config
+        and type(self.Config.Get) == "function" then
+
+        local success, value =
+            pcall(function()
+                return self.Config:Get(
+                    normalizedFeature .. "." .. normalizedSetting,
+                    default
+                )
+            end)
+
+        if success then
+            return value
+        end
+    end
+
+    local record =
+        self.Features[normalizedFeature]
+
+    if record
+        and type(record.Module) == "table"
+        and type(record.Module.GetSetting) == "function" then
+
+        local success, value =
+            pcall(function()
+                return record.Module:GetSetting(
+                    normalizedSetting,
+                    default
+                )
+            end)
+
+        if success then
+            return value
+        end
+    end
+
+    if self.Settings[normalizedSetting] ~= nil then
+        return self.Settings[normalizedSetting]
+    end
+
+    return default
+end
+
+
+function FeatureManager:UpdateFeatureSetting(
+    featureName,
+    settingName,
+    value
+)
+
+    local normalizedFeature =
+        NormalizeName(featureName)
+
+    local normalizedSetting =
+        NormalizeName(settingName)
+
+    if not normalizedFeature
+        or not normalizedSetting then
+
+        return false,
+            "Invalid feature or setting name"
+    end
+
+    if self.Config
+        and type(self.Config.Set) == "function" then
+
+        local success, result =
+            pcall(function()
+                return self.Config:Set(
+                    normalizedFeature .. "." .. normalizedSetting,
+                    value
+                )
+            end)
+
+        if success then
+            if result == true then
+                return true
+            end
+
+            if result == false then
+                return false,
+                    "Config rejected update"
+            end
+        end
+    end
+
+    local record =
+        self.Features[normalizedFeature]
+
+    if record
+        and type(record.Module) == "table"
+        and type(record.Module.SetSetting) == "function" then
+
+        local success, result =
+            pcall(function()
+                return record.Module:SetSetting(
+                    normalizedSetting,
+                    value
+                )
+            end)
+
+        if success then
+            if result == false then
+                return false,
+                    "Feature rejected update"
+            end
+
+            return true
+        end
+    end
+
+    if self.Settings[normalizedSetting] ~= nil then
+        self.Settings[normalizedSetting] =
+            value
+        return true
+    end
+
+    return false,
+        "Setting not found"
+end
+
+
 function FeatureManager:GetSettings()
 
     return DeepCopy(

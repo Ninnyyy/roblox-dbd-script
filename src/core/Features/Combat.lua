@@ -46,6 +46,11 @@ local Combat = {
     Settings = {
         Enabled = true,
 
+        -- Premium features
+        AutoAttack = false,
+        SmartAttack = false,
+        TargetPriority = "Health",
+
         -- General
         TeamCheck = true,
         FriendlyFire = false,
@@ -851,6 +856,46 @@ end
 -- Update
 
 
+function Combat:AttackNearestValidTarget()
+    local nearestPlayer, _ = self:GetNearestTarget()
+    if not nearestPlayer then
+        return false
+    end
+
+    return self:Attack(nearestPlayer)
+end
+
+
+function Combat:AttackBestPriorityTarget()
+    local targets = self:GetTargets()
+    if #targets == 0 then
+        return false
+    end
+
+    local bestTarget = nil
+    local bestValue = -math.huge
+
+    for _, player in ipairs(targets) do
+        local humanoid = self:GetHumanoid(player)
+        if humanoid then
+            local healthValue = math.max(0, humanoid.Health)
+            local distance = self:GetDistance(player)
+            local score = (1000 - distance) + healthValue
+            if score > bestValue then
+                bestValue = score
+                bestTarget = player
+            end
+        end
+    end
+
+    if not bestTarget then
+        return false
+    end
+
+    return self:Attack(bestTarget)
+end
+
+
 function Combat:Update(deltaTime)
     if not self.Enabled then
         return
@@ -892,6 +937,14 @@ function Combat:Update(deltaTime)
 
             self.State.CurrentTarget =
                 nil
+        end
+    end
+
+    if self:GetSetting("AutoAttack", false) then
+        if self:GetSetting("SmartAttack", false) then
+            self:AttackBestPriorityTarget()
+        else
+            self:AttackNearestValidTarget()
         end
     end
 end

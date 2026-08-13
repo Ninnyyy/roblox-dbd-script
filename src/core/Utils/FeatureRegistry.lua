@@ -101,6 +101,18 @@ local function NormalizeCategory(category)
         movement = "Movement",
         move = "Movement",
 
+        survivor = "Survivor",
+        survivors = "Survivor",
+
+        camera = "Camera",
+        cameras = "Camera",
+
+        environment = "Environment",
+        environments = "Environment",
+
+        developer = "Developer",
+        developers = "Developer",
+
         misc = "Misc",
         miscellaneous = "Misc",
         general = "Misc",

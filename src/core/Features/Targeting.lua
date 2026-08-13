@@ -63,6 +63,13 @@ local Targeting = {
     Settings = {
         Enabled = true,
 
+        -- Premium features
+        PremiumMode = false,
+        SmartPriority = true,
+        AutoTarget = false,
+        AimAssist = false,
+        AimAssistStrength = 0.5,
+
         -- General
         TeamCheck = true,
         FriendlyFire = false,
@@ -1340,6 +1347,76 @@ end
 -- Refresh
 
 
+function Targeting:GetPriorityScore(target)
+    if not target or not target.Player then
+        return -math.huge
+    end
+
+    local distanceScore = 0
+    local healthScore = 0
+    local visibilityScore = 0
+    local centerScore = 0
+
+    local distance = tonumber(target.Distance) or math.huge
+    if distance < math.huge then
+        distanceScore = math.max(0, 2000 - distance)
+    end
+
+    local healthPercent = tonumber(target.HealthPercent) or 100
+    healthScore = healthPercent * 2
+
+    if target.Screen and target.Screen.Visible then
+        visibilityScore = 150
+    end
+
+    if target.WithinFOV then
+        centerScore = 200
+    end
+
+    if target.ScreenDistance then
+        centerScore = centerScore + math.max(0, 1000 - target.ScreenDistance)
+    end
+
+    return distanceScore + healthScore + visibilityScore + centerScore
+end
+
+
+function Targeting:GetPremiumTarget()
+    local targets = self:GetAllTargets()
+    if #targets == 0 then
+        return nil
+    end
+
+    local bestTarget = nil
+    local bestScore = -math.huge
+
+    for _, target in ipairs(targets) do
+        local score = self:GetPriorityScore(target)
+        if score > bestScore then
+            bestScore = score
+            bestTarget = target
+        end
+    end
+
+    return bestTarget
+end
+
+
+function Targeting:EnablePremiumMode(enabled)
+    self.Settings.PremiumMode = enabled == true
+    if self.Settings.PremiumMode then
+        self.Settings.AutoTarget = true
+    end
+    return self.Settings.PremiumMode
+end
+
+
+function Targeting:SetAutoTarget(enabled)
+    self.Settings.AutoTarget = enabled == true
+    return self.Settings.AutoTarget
+end
+
+
 function Targeting:Refresh()
     if not self.Enabled then
         return nil
@@ -1347,8 +1424,11 @@ function Targeting:Refresh()
 
     self:ClearCache()
 
-    local target =
-        self:GetBestTarget()
+    local target = self:GetBestTarget()
+
+    if self:GetSetting("PremiumMode", false) then
+        target = self:GetPremiumTarget()
+    end
 
     self:SetTarget(
         target
