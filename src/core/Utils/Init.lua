@@ -1,80 +1,63 @@
 --[[
     Lua Test Script
-    Init.lua
+    Utils/Init.lua
 
-    Main bootstrap / module loader.
-
-    Version:
-        3.0.0
+    Utility bootstrap / manager.
 
     Responsibilities:
-        - Load core modules
-        - Load utilities
-        - Load features
-        - Load UI
-        - Initialize Config
-        - Initialize Connections
-        - Initialize Character
-        - Initialize Cleanup
-        - Setup Logger
-        - Setup Signal
-        - Setup FeatureRegistry
-        - Setup FeatureManager
-        - Register features
-        - Resolve feature dependencies
-        - Start framework
-        - Initialize UI
-        - Expose public API
-        - Safe module loading
-        - Runtime diagnostics
-        - Shutdown / cleanup
+        - Load utility modules
+        - Expose utility modules
+        - Initialize utility modules
+        - Setup utility modules
+        - Provide utility lookup
+        - Track utility load errors
+        - Track initialization state
+        - Provide runtime status
+        - Safely destroy utility modules
 ]]
 
-local Init = {
-    Name = "Init",
+local Utils = {
+    Name = "Utils",
     Version = "3.0.0",
 
     Initialized = false,
     Running = false,
 
-    BaseURL = nil,
+    BaseURL =
+        "https://raw.githubusercontent.com/Ninnyyy/Lua-Test-Script/main/",
 
     Modules = {},
-    Core = {},
-    Utils = {},
-    Features = {},
-    UI = {},
 
-    API = {},
+    Helpers = nil,
+    Math = nil,
+    Players = nil,
+
+    Errors = {},
 }
 
-
--- CONFIGURATION
-
-
-local BASE_URL =
-    "https://raw.githubusercontent.com/Ninnyyy/Lua-Test-Script/main/src/core/Init.lua"
-
-Init.BaseURL = BASE_URL
 
 
 -- INTERNAL STATE
 
 
-local LoadErrors = {}
 local LoadedPaths = {}
 
 
--- HELPERS
+
+-- SAFE STRING
 
 
 local function SafeToString(value)
+
     if value == nil then
         return "nil"
     end
 
     local success, result =
-        pcall(tostring, value)
+        pcall(
+            tostring,
+            value
+        )
 
     if success then
         return result
@@ -84,49 +67,67 @@ local function SafeToString(value)
 end
 
 
-local function RecordLoadError(
+
+-- ERROR TRACKING
+
+
+local function RecordError(
     path,
-    errorMessage
+    message
 )
+
     table.insert(
-        LoadErrors,
+        Utils.Errors,
         {
             Path = path,
-            Error = errorMessage,
+            Error = SafeToString(message),
         }
     )
 end
 
 
+
+-- REMOTE LOADER
+
+
 local function LoadRemote(
     path
 )
+
     if type(path) ~= "string"
         or path == "" then
 
-        error("Invalid module path")
+        error(
+            "Invalid utility module path"
+        )
     end
 
-    if LoadedPaths[path] then
+    if LoadedPaths[path] ~= nil then
         return LoadedPaths[path]
     end
 
     local url =
-        BASE_URL .. path
+        Utils.BaseURL .. path
 
-    local success, source =
-        pcall(function()
-            return game:HttpGet(url)
-        end)
+    local requestSuccess, source =
+        pcall(
+            function()
+                return game:HttpGet(
+                    url,
+                    true
+                )
+            end
+        )
 
-    if not success then
-        RecordLoadError(
+    if not requestSuccess then
+
+        RecordError(
             path,
             source
         )
 
         error(
-            "Failed to download module '"
+            "Failed to download utility module '"
                 .. path
                 .. "': "
                 .. SafeToString(source)
@@ -137,10 +138,10 @@ local function LoadRemote(
         or source == "" then
 
         local message =
-            "Empty source returned for module: "
+            "Empty source returned for utility module: "
                 .. path
 
-        RecordLoadError(
+        RecordError(
             path,
             message
         )
@@ -148,16 +149,21 @@ local function LoadRemote(
         error(message)
     end
 
-    local loader =
+    local loader,
+        compileError =
         loadstring(source)
 
     if type(loader) ~= "function" then
 
         local message =
-            "Failed to compile module: "
+            "Failed to compile utility module '"
                 .. path
+                .. "': "
+                .. SafeToString(
+                    compileError
+                )
 
-        RecordLoadError(
+        RecordError(
             path,
             message
         )
@@ -165,18 +171,19 @@ local function LoadRemote(
         error(message)
     end
 
-    local moduleSuccess, module =
+    local executeSuccess,
+        module =
         pcall(loader)
 
-    if not moduleSuccess then
+    if not executeSuccess then
 
-        RecordLoadError(
+        RecordError(
             path,
             module
         )
 
         error(
-            "Module execution failed '"
+            "Utility module execution failed '"
                 .. path
                 .. "': "
                 .. SafeToString(module)
@@ -186,10 +193,10 @@ local function LoadRemote(
     if module == nil then
 
         local message =
-            "Module returned nil: "
+            "Utility module returned nil: "
                 .. path
 
-        RecordLoadError(
+        RecordError(
             path,
             message
         )
@@ -197,28 +204,34 @@ local function LoadRemote(
         error(message)
     end
 
-    LoadedPaths[path] = module
+    LoadedPaths[path] =
+        module
 
     return module
 end
+
+
+
+-- SAFE INITIALIZE
 
 
 local function SafeInitialize(
     module,
     ...
 )
+
     if type(module) ~= "table" then
         return true
     end
 
-    local initialize =
-        module.Initialize
+    if type(module.Initialize)
+        ~= "function" then
 
-    if type(initialize) ~= "function" then
         return true
     end
 
-    local success, result =
+    local success,
+        result =
         pcall(
             function()
                 return module:Initialize(...)
@@ -231,29 +244,34 @@ local function SafeInitialize(
 
     if result == false then
         return false,
-            "Module rejected initialization"
+            "Utility rejected initialization"
     end
 
     return true, result
 end
 
 
+
+-- SAFE SETUP
+
+
 local function SafeSetup(
     module,
     ...
 )
+
     if type(module) ~= "table" then
         return true
     end
 
-    local setup =
-        module.Setup
+    if type(module.Setup)
+        ~= "function" then
 
-    if type(setup) ~= "function" then
         return true
     end
 
-    local success, result =
+    local success,
+        result =
         pcall(
             function()
                 return module:Setup(...)
@@ -266,63 +284,36 @@ local function SafeSetup(
 
     if result == false then
         return false,
-            "Module rejected setup"
+            "Utility rejected setup"
     end
 
     return true, result
 end
 
 
-local function SafeDestroy(
+
+-- SAFE START
+
+
+local function SafeStart(
     module
 )
+
     if type(module) ~= "table" then
         return true
     end
 
-    local destroy =
-        module.Destroy
+    if type(module.Start)
+        ~= "function" then
 
-    if type(destroy) ~= "function" then
         return true
     end
 
-    local success, result =
-        pcall(function()
-            return module:Destroy()
-        end)
-
-    if not success then
-        return false, result
-    end
-
-    return true
-end
-
-
-local function CallOptional(
-    module,
-    methodName,
-    ...
-)
-    if type(module) ~= "table" then
-        return true
-    end
-
-    local method =
-        module[methodName]
-
-    if type(method) ~= "function" then
-        return true
-    end
-
-    local success, result =
+    local success,
+        result =
         pcall(
             function()
-                return method(
-                    module,
-                    ...
-                )
+                return module:Start()
             end
         )
 
@@ -332,850 +323,263 @@ local function CallOptional(
 
     if result == false then
         return false,
-            "Module rejected " .. methodName
+            "Utility rejected start"
     end
 
     return true, result
 end
 
 
--- LOAD CORE
+
+-- SAFE STOP
 
 
-local function LoadCore()
-    Init.Core.Config =
-        LoadRemote(
-            "Config.lua"
+local function SafeStop(
+    module
+)
+
+    if type(module) ~= "table" then
+        return true
+    end
+
+    if type(module.Stop)
+        ~= "function" then
+
+        return true
+    end
+
+    local success,
+        result =
+        pcall(
+            function()
+                return module:Stop()
+            end
         )
 
-    Init.Core.Connections =
-        LoadRemote(
-            "Connections.lua"
+    if not success then
+        return false, result
+    end
+
+    return true, result
+end
+
+
+
+-- SAFE DESTROY
+
+
+local function SafeDestroy(
+    module
+)
+
+    if type(module) ~= "table" then
+        return true
+    end
+
+    if type(module.Destroy)
+        ~= "function" then
+
+        return true
+    end
+
+    local success,
+        result =
+        pcall(
+            function()
+                return module:Destroy()
+            end
         )
 
-    Init.Core.Character =
+    if not success then
+        return false, result
+    end
+
+    return true, result
+end
+
+
+
+-- LOAD MODULES
+
+
+local function LoadModules()
+
+    Utils.Helpers =
         LoadRemote(
-            "Character.lua"
+            "src/core/Utils/Helpers.lua"
         )
 
-    Init.Core.Cleanup =
+    Utils.Math =
         LoadRemote(
-            "Cleanup.lua"
+            "src/core/Utils/Math.lua"
         )
 
-    Init.Core.FeatureRegistry =
+    Utils.Players =
         LoadRemote(
-            "FeatureRegistry.lua"
+            "src/core/Utils/Players.lua"
         )
 
-    Init.Core.FeatureManager =
-        LoadRemote(
-            "FeatureManager.lua"
-        )
+    Utils.Modules = {
+        Helpers =
+            Utils.Helpers,
 
-    -- Optional core modules.
-    --
-    -- These are loaded only when they exist in the
-    -- current project architecture.
+        Math =
+            Utils.Math,
 
-    local optionalCore = {
-        "Logger.lua",
-        "Signal.lua",
+        Players =
+            Utils.Players,
     }
-
-    for _, fileName in ipairs(optionalCore) do
-
-        local success, result =
-            pcall(
-                LoadRemote,
-                fileName
-            )
-
-        if success then
-
-            local moduleName =
-                string.gsub(
-                    fileName,
-                    "%.lua$",
-                    ""
-                )
-
-            Init.Core[moduleName] =
-                result
-
-        end
-    end
 end
 
 
--- LOAD UTILS
 
+-- BUILD CONTEXT
 
-local function LoadUtils()
-    Init.Utils.Helpers =
-        LoadRemote(
-            "Utils/Helpers.lua"
-        )
 
-    Init.Utils.Math =
-        LoadRemote(
-            "Utils/Math.lua"
-        )
-
-    Init.Utils.Players =
-        LoadRemote(
-            "Utils/Players.lua"
-        )
-end
-
-
--- LOAD FEATURES
-
-
-local function LoadFeatures()
-    Init.Features.Visuals =
-        LoadRemote(
-            "Features/Visuals.lua"
-        )
-
-    Init.Features.Targeting =
-        LoadRemote(
-            "Features/Targeting.lua"
-        )
-
-    Init.Features.ESP =
-        LoadRemote(
-            "Features/ESP.lua"
-        )
-
-    Init.Features.Combat =
-        LoadRemote(
-            "Features/Combat.lua"
-        )
-
-    Init.Features.GameFeatures =
-        LoadRemote(
-            "Features/GameFeatures.lua"
-        )
-end
-
-
--- LOAD UI
-
-
-local function LoadUI()
-    Init.UI.Components =
-        LoadRemote(
-            "UI/Components.lua"
-        )
-
-    Init.UI.Notifications =
-        LoadRemote(
-            "UI/Notifications.lua"
-        )
-
-    Init.UI.Window =
-        LoadRemote(
-            "UI/Window.lua"
-        )
-
-    Init.UI.Keybinds =
-        LoadRemote(
-            "UI/Keybinds.lua"
-        )
-end
-
-
--- COLLECT ALL MODULES
-
-
-local function BuildModuleTable()
-
-    Init.Modules = {
-        Config =
-            Init.Core.Config,
-
-        Connections =
-            Init.Core.Connections,
-
-        Character =
-            Init.Core.Character,
-
-        Cleanup =
-            Init.Core.Cleanup,
-
-        FeatureRegistry =
-            Init.Core.FeatureRegistry,
-
-        FeatureManager =
-            Init.Core.FeatureManager,
-
-        Logger =
-            Init.Core.Logger,
-
-        Signal =
-            Init.Core.Signal,
-
-        Utils =
-            Init.Utils,
-
-        Features =
-            Init.Features,
-
-        UI =
-            Init.UI,
-    }
-
-    -- Expose every individual utility/module too.
-
-    for name, module in pairs(
-        Init.Core
-    ) do
-
-        Init.Modules[name] =
-            module
-    end
-
-    for name, module in pairs(
-        Init.Utils
-    ) do
-
-        Init.Modules[name] =
-            module
-    end
-
-    for name, module in pairs(
-        Init.Features
-    ) do
-
-        Init.Modules[name] =
-            module
-    end
-
-    for name, module in pairs(
-        Init.UI
-    ) do
-
-        Init.Modules[name] =
-            module
-    end
-end
-
-
--- CONFIGURATION INITIALIZATION
-
-
-local function InitializeConfig()
-
-    local Config =
-        Init.Core.Config
-
-    if not Config then
-        error(
-            "Config module failed to load"
-        )
-    end
-
-    if type(Config.Initialize) ==
-        "function" then
-
-        local success, result =
-            pcall(function()
-                return Config:Initialize()
-            end)
-
-        if not success then
-            error(
-                "Config initialization failed: "
-                    .. SafeToString(result)
-            )
-        end
-    end
-end
-
-
--- LOGGER
-
-
-local function InitializeLogger()
-
-    local Logger =
-        Init.Core.Logger
-
-    if not Logger then
-        return
-    end
-
-    local success, errorMessage =
-        SafeInitialize(
-            Logger,
-            Init.Modules
-        )
-
-    if not success then
-        error(
-            "Logger initialization failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-end
-
-
--- SIGNAL
-
-
-local function InitializeSignal()
-
-    local Signal =
-        Init.Core.Signal
-
-    if not Signal then
-        return
-    end
-
-    local success, errorMessage =
-        SafeInitialize(
-            Signal
-        )
-
-    if not success then
-        error(
-            "Signal initialization failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-end
-
-
--- CONNECTIONS
-
-
-local function InitializeConnections()
-
-    local Connections =
-        Init.Core.Connections
-
-    if not Connections then
-        return
-    end
-
-    local success, errorMessage =
-        SafeInitialize(
-            Connections,
-            Init.Modules
-        )
-
-    if not success then
-        error(
-            "Connections initialization failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-end
-
-
--- CHARACTER
-
-
-local function InitializeCharacter()
-
-    local Character =
-        Init.Core.Character
-
-    if not Character then
-        return
-    end
-
-    local success, errorMessage =
-        SafeInitialize(
-            Character,
-            Init.Modules
-        )
-
-    if not success then
-        error(
-            "Character initialization failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-end
-
-
--- CLEANUP
-
-
-local function InitializeCleanup()
-
-    local Cleanup =
-        Init.Core.Cleanup
-
-    if not Cleanup then
-        return
-    end
-
-    local success, errorMessage =
-        SafeInitialize(
-            Cleanup,
-            Init.Modules
-        )
-
-    if not success then
-        error(
-            "Cleanup initialization failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-end
-
-
--- FEATURE REGISTRY
-
-
-local function InitializeRegistry()
-
-    local Registry =
-        Init.Core.FeatureRegistry
-
-    if not Registry then
-        error(
-            "FeatureRegistry module failed to load"
-        )
-    end
-
-    local success, errorMessage =
-        SafeInitialize(
-            Registry,
-            Init.Modules
-        )
-
-    if not success then
-        error(
-            "FeatureRegistry initialization failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-end
-
-
--- FEATURE MANAGER
-
-
-local function InitializeFeatureManager()
-
-    local Manager =
-        Init.Core.FeatureManager
-
-    if not Manager then
-        error(
-            "FeatureManager module failed to load"
-        )
-    end
-
-    -- The updated FeatureManager uses Setup()
-    -- to receive the complete module context.
-
-    local success, errorMessage =
-        pcall(function()
-            Manager:Setup(
-                Init.Modules
-            )
-        end)
-
-    if not success then
-        error(
-            "FeatureManager setup failed: "
-                .. SafeToString(errorMessage)
-        )
-    end
-
-    -- Explicitly configure logger.
-
-    if Init.Core.Logger
-        and type(
-            Manager.SetLogger
-        ) == "function" then
-
-        Manager:SetLogger(
-            Init.Core.Logger
-        )
-    end
-
-    -- Explicitly configure Signal.
-
-    if Init.Core.Signal
-        and type(
-            Manager.SetSignalModule
-        ) == "function" then
-
-        Manager:SetSignalModule(
-            Init.Core.Signal
-        )
-    end
-
-    -- Keep Config synchronized.
-
-    Manager.Config =
-        Init.Core.Config
-
-    Manager.Connections =
-        Init.Core.Connections
-
-    Manager.Character =
-        Init.Core.Character
-
-    Manager.Cleanup =
-        Init.Core.Cleanup
-
-    Manager.Registry =
-        Init.Core.FeatureRegistry
-
-    Manager.Modules =
-        Init.Modules
-end
-
-
--- REGISTER FEATURES
-
-
-local function RegisterFeatures()
-
-    local Manager =
-        Init.Core.FeatureManager
-
-    if not Manager then
-        error(
-            "FeatureManager unavailable"
-        )
-    end
-
-    
-    -- VISUALS
-    
-
-    Manager:Register(
-        "Visuals",
-        Init.Features.Visuals,
-        {
-            Priority = 10,
-            AutoStart = true,
-
-            Dependencies = {},
-        }
-    )
-
-    
-    -- TARGETING
-    
-
-    Manager:Register(
-        "Targeting",
-        Init.Features.Targeting,
-        {
-            Priority = 20,
-            AutoStart = false,
-
-            Dependencies = {},
-        }
-    )
-
-    
-    -- ESP
-    
-
-    Manager:Register(
-        "ESP",
-        Init.Features.ESP,
-        {
-            Priority = 30,
-            AutoStart = true,
-
-            Dependencies = {
-                "Visuals",
-            },
-        }
-    )
-
-    
-    -- COMBAT
-    
-
-    Manager:Register(
-        "Combat",
-        Init.Features.Combat,
-        {
-            Priority = 40,
-            AutoStart = false,
-
-            Dependencies = {
-                "Targeting",
-            },
-        }
-    )
-
-    
-    -- GAME FEATURES
-    
-
-    Manager:Register(
-        "GameFeatures",
-        Init.Features.GameFeatures,
-        {
-            Priority = 50,
-            AutoStart = true,
-
-            Dependencies = {},
-        }
-    )
-
-    Manager:SortOrder()
-end
-
-
--- INITIALIZE FEATURE CONTEXT
-
-
-local function PrepareFeatureContext()
-
-    local Manager =
-        Init.Core.FeatureManager
-
-    if not Manager then
-        return
-    end
-
-    -- The FeatureManager itself creates the context
-    -- passed to every feature.
-    --
-    -- This additionally exposes the complete module
-    -- table directly to feature modules that support
-    -- SetModules().
-
-    if type(
-        Manager.SetModules
-    ) == "function" then
-
-        Manager:SetModules(
-            Init.Modules
-        )
-    end
-
-    -- Give each feature direct access to the complete
-    -- module collection when supported.
-
-    for _, feature in pairs(
-        Init.Features
-    ) do
-
-        if type(feature) == "table"
-            and type(
-                feature.SetModules
-            ) == "function" then
-
-            pcall(function()
-                feature:SetModules(
-                    Init.Modules
-                )
-            end)
-        end
-    end
-end
-
-
--- START FEATURE MANAGER
-
-
-local function StartFeatureManager()
-
-    local Manager =
-        Init.Core.FeatureManager
-
-    if not Manager then
-        error(
-            "FeatureManager unavailable"
-        )
-    end
-
-    local success, result =
-        pcall(function()
-            return Manager:Start()
-        end)
-
-    if not success then
-        error(
-            "FeatureManager failed to start: "
-                .. SafeToString(result)
-        )
-    end
-
-    return result
-end
-
-
--- UI CONTEXT
-
-
-local function BuildUIContext()
+local function BuildContext()
 
     return {
-        Config =
-            Init.Core.Config,
-
-        Connections =
-            Init.Core.Connections,
-
-        Character =
-            Init.Core.Character,
-
-        Cleanup =
-            Init.Core.Cleanup,
-
-        Logger =
-            Init.Core.Logger,
-
-        Signal =
-            Init.Core.Signal,
-
-        FeatureRegistry =
-            Init.Core.FeatureRegistry,
-
-        FeatureManager =
-            Init.Core.FeatureManager,
+        Utils =
+            Utils,
 
         Modules =
-            Init.Modules,
+            Utils.Modules,
 
-        Features =
-            Init.Features,
+        Helpers =
+            Utils.Helpers,
 
-        UI =
-            Init.UI,
+        Math =
+            Utils.Math,
 
-        Init =
-            Init,
+        Players =
+            Utils.Players,
     }
 end
 
 
--- INITIALIZE UI
+
+-- INITIALIZE MODULES
 
 
-local function InitializeUI()
+local function InitializeModules()
 
     local context =
-        BuildUIContext()
+        BuildContext()
 
-    
-    -- COMPONENTS
-    
-
-    if Init.UI.Components then
-
-        local success, errorMessage =
-            SafeInitialize(
-                Init.UI.Components,
-                context
-            )
-
-        if not success then
-
-            warn(
-                "[Lua Test] Components initialization failed:",
-                errorMessage
-            )
-        end
-    end
-
-    
-    -- NOTIFICATIONS
-    
-
-    if Init.UI.Notifications then
-
-        local success, errorMessage =
-            SafeInitialize(
-                Init.UI.Notifications,
-                context
-            )
-
-        if not success then
-
-            warn(
-                "[Lua Test] Notifications initialization failed:",
-                errorMessage
-            )
-        end
-    end
-
-    
-    -- WINDOW
-    
-
-    if Init.UI.Window then
-
-        local success, errorMessage =
-            SafeInitialize(
-                Init.UI.Window,
-                context
-            )
-
-        if not success then
-
-            warn(
-                "[Lua Test] Window initialization failed:",
-                errorMessage
-            )
-        end
-    end
-
-    
-    -- KEYBINDS
-    
-
-    if Init.UI.Keybinds then
-
-        local success, errorMessage =
-            SafeInitialize(
-                Init.UI.Keybinds,
-                context
-            )
-
-        if not success then
-
-            warn(
-                "[Lua Test] Keybinds initialization failed:",
-                errorMessage
-            )
-        end
-    end
-
-    
-    -- SETUP UI MODULES
-    
-
-    local uiModules = {
-        Init.UI.Components,
-        Init.UI.Notifications,
-        Init.UI.Window,
-        Init.UI.Keybinds,
-    }
-
-    for _, module in ipairs(uiModules) do
+    for name, module in pairs(
+        Utils.Modules
+    ) do
 
         if type(module) == "table" then
 
-            SafeSetup(
-                module,
-                context
-            )
+            local success,
+                errorMessage =
+                SafeInitialize(
+                    module,
+                    context
+                )
+
+            if not success then
+
+                RecordError(
+                    name,
+                    errorMessage
+                )
+
+                warn(
+                    "[Lua Test] Utility initialization failed:",
+                    name,
+                    errorMessage
+                )
+            end
         end
     end
 end
+
+
+
+-- SETUP MODULES
+
+
+local function SetupModules()
+
+    local context =
+        BuildContext()
+
+    for name, module in pairs(
+        Utils.Modules
+    ) do
+
+        if type(module) == "table" then
+
+            local success,
+                errorMessage =
+                SafeSetup(
+                    module,
+                    context
+                )
+
+            if not success then
+
+                RecordError(
+                    name,
+                    errorMessage
+                )
+
+                warn(
+                    "[Lua Test] Utility setup failed:",
+                    name,
+                    errorMessage
+                )
+            end
+        end
+    end
+end
+
+
+
+-- START MODULES
+
+
+local function StartModules()
+
+    for name, module in pairs(
+        Utils.Modules
+    ) do
+
+        if type(module) == "table" then
+
+            local success,
+                errorMessage =
+                SafeStart(
+                    module
+                )
+
+            if not success then
+
+                RecordError(
+                    name,
+                    errorMessage
+                )
+
+                warn(
+                    "[Lua Test] Utility start failed:",
+                    name,
+                    errorMessage
+                )
+            end
+        end
+    end
+end
+
 
 
 -- PUBLIC API
 
 
-function Init:GetModule(name)
+function Utils:Get(
+    name
+)
 
     if type(name) ~= "string" then
         return nil
@@ -1185,64 +589,46 @@ function Init:GetModule(name)
 end
 
 
-function Init:GetFeature(name)
+function Utils:GetModule(
+    name
+)
 
-    if not self.Core.FeatureManager then
-        return nil
-    end
-
-    return self.Core.FeatureManager:Get(
-        name
-    )
+    return self:Get(name)
 end
 
 
-function Init:GetFeatureManager()
+function Utils:Has(
+    name
+)
 
-    return self.Core.FeatureManager
+    return self:Get(name) ~= nil
 end
 
 
-function Init:GetRegistry()
+function Utils:GetHelpers()
 
-    return self.Core.FeatureRegistry
+    return self.Helpers
 end
 
 
-function Init:GetConfig()
+function Utils:GetMath()
 
-    return self.Core.Config
+    return self.Math
 end
 
 
-function Init:GetUI(name)
+function Utils:GetPlayers()
 
-    if not name then
-        return self.UI
-    end
-
-    return self.UI[name]
+    return self.Players
 end
 
 
-function Init:IsRunning()
-
-    return self.Running == true
-end
-
-
-function Init:IsInitialized()
-
-    return self.Initialized == true
-end
-
-
-function Init:GetLoadErrors()
+function Utils:GetErrors()
 
     local result = {}
 
     for index, item in ipairs(
-        LoadErrors
+        self.Errors
     ) do
 
         result[index] = {
@@ -1255,17 +641,67 @@ function Init:GetLoadErrors()
 end
 
 
-function Init:GetStatus()
+function Utils:GetStatus()
 
-    local managerStatus
+    local moduleStatus = {}
 
-    if self.Core.FeatureManager
-        and type(
-            self.Core.FeatureManager.GetRuntimeStatus
-        ) == "function" then
+    for name, module in pairs(
+        self.Modules
+    ) do
 
-        managerStatus =
-            self.Core.FeatureManager:GetRuntimeStatus()
+        local status = {
+            Loaded = module ~= nil,
+        }
+
+        if type(module) == "table" then
+
+            if type(module.IsInitialized)
+                == "function" then
+
+                local success,
+                    initialized =
+                    pcall(
+                        function()
+                            return module:IsInitialized()
+                        end
+                    )
+
+                if success then
+                    status.Initialized =
+                        initialized
+                end
+
+            elseif module.Initialized ~= nil then
+
+                status.Initialized =
+                    module.Initialized
+            end
+
+            if type(module.IsRunning)
+                == "function" then
+
+                local success,
+                    running =
+                    pcall(
+                        function()
+                            return module:IsRunning()
+                        end
+                    )
+
+                if success then
+                    status.Running =
+                        running
+                end
+
+            elseif module.Running ~= nil then
+
+                status.Running =
+                    module.Running
+            end
+        end
+
+        moduleStatus[name] =
+            status
     end
 
     return {
@@ -1281,19 +717,32 @@ function Init:GetStatus()
         Running =
             self.Running,
 
-        Manager =
-            managerStatus,
+        Modules =
+            moduleStatus,
 
-        LoadErrors =
-            self:GetLoadErrors(),
+        Errors =
+            self:GetErrors(),
     }
 end
+
+
+function Utils:IsInitialized()
+
+    return self.Initialized == true
+end
+
+
+function Utils:IsRunning()
+
+    return self.Running == true
+end
+
 
 
 -- START
 
 
-function Init:Start()
+function Utils:Start()
 
     if self.Running then
         return true
@@ -1301,7 +750,8 @@ function Init:Start()
 
     if not self.Initialized then
 
-        local success, errorMessage =
+        local success,
+            errorMessage =
             self:Initialize()
 
         if not success then
@@ -1310,201 +760,59 @@ function Init:Start()
         end
     end
 
-    if self.Core.FeatureManager then
-
-        local success, result =
-            pcall(function()
-                return self.Core.FeatureManager:Start()
-            end)
-
-        if not success then
-
-            return false,
-                result
-        end
-    end
+    StartModules()
 
     self.Running = true
 
     return true
 end
+
 
 
 -- INITIALIZE
 
 
-function Init:Initialize()
+function Utils:Initialize()
 
     if self.Initialized then
         return true
     end
 
-    
-    -- LOAD
-    
-
-    local success, errorMessage =
+    local success,
+        errorMessage =
         pcall(function()
 
-            LoadCore()
+            LoadModules()
 
-            LoadUtils()
+            InitializeModules()
 
-            LoadFeatures()
-
-            LoadUI()
-
-            BuildModuleTable()
+            SetupModules()
 
         end)
 
     if not success then
 
-        return false,
+        RecordError(
+            "Utils/Init.lua",
             errorMessage
-    end
-
-    
-    -- INITIALIZE CORE
-    
-
-    success, errorMessage =
-        pcall(function()
-
-            InitializeConfig()
-
-            InitializeLogger()
-
-            InitializeSignal()
-
-            InitializeConnections()
-
-            InitializeCharacter()
-
-            InitializeCleanup()
-
-            InitializeRegistry()
-
-            InitializeFeatureManager()
-
-        end)
-
-    if not success then
+        )
 
         return false,
             errorMessage
     end
 
-    
-    -- REGISTER FEATURES
-    
-
-    success, errorMessage =
-        pcall(function()
-
-            RegisterFeatures()
-
-            PrepareFeatureContext()
-
-        end)
-
-    if not success then
-
-        return false,
-            errorMessage
-    end
-
-    
-    -- START FEATURE MANAGER
-    
-
-    success, errorMessage =
-        pcall(function()
-
-            StartFeatureManager()
-
-        end)
-
-    if not success then
-
-        return false,
-            errorMessage
-    end
-
-    
-    -- UI
-    
-
-    pcall(function()
-        InitializeUI()
-    end)
-
-    
-    -- BUILD PUBLIC API
-    
-
-    self.API = {
-
-        Config =
-            self.Core.Config,
-
-        Connections =
-            self.Core.Connections,
-
-        Character =
-            self.Core.Character,
-
-        Cleanup =
-            self.Core.Cleanup,
-
-        FeatureRegistry =
-            self.Core.FeatureRegistry,
-
-        FeatureManager =
-            self.Core.FeatureManager,
-
-        Logger =
-            self.Core.Logger,
-
-        Signal =
-            self.Core.Signal,
-
-        Features =
-            self.Features,
-
-        UI =
-            self.UI,
-
-        Modules =
-            self.Modules,
-
-        GetFeature =
-            function(name)
-                return self:GetFeature(name)
-            end,
-
-        GetConfig =
-            function()
-                return self:GetConfig()
-            end,
-
-        GetStatus =
-            function()
-                return self:GetStatus()
-            end,
-    }
-
-    self.Initialized = true
-    self.Running = true
+    self.Initialized =
+        true
 
     return true
 end
 
 
+
 -- STOP
 
 
-function Init:Stop()
+function Utils:Stop()
 
     if not self.Running then
         return true
@@ -1512,45 +820,23 @@ function Init:Stop()
 
     local success = true
 
-    
-    -- STOP FEATURE MANAGER
-    
-
-    if self.Core.FeatureManager then
-
-        local result =
-            pcall(function()
-                self.Core.FeatureManager:Stop()
-            end)
-
-        if not result then
-            success = false
-        end
-    end
-
-    
-    -- STOP UI
-    
-
-    local uiOrder = {
-        "Keybinds",
-        "Window",
-        "Notifications",
-        "Components",
+    local stopOrder = {
+        "Players",
+        "Math",
+        "Helpers",
     }
 
-    for _, name in ipairs(uiOrder) do
+    for _, name in ipairs(
+        stopOrder
+    ) do
 
         local module =
-            self.UI[name]
+            self.Modules[name]
 
         if module then
 
             local stopped =
-                CallOptional(
-                    module,
-                    "Stop"
-                )
+                SafeStop(module)
 
             if not stopped then
                 success = false
@@ -1564,96 +850,71 @@ function Init:Stop()
 end
 
 
+
 -- DESTROY
 
 
-function Init:Destroy()
+function Utils:Destroy()
 
     self:Stop()
 
-    
-    -- FEATURE MANAGER
-    
-
-    if self.Core.FeatureManager then
-
-        pcall(function()
-            self.Core.FeatureManager:Destroy()
-        end)
-    end
-
-    
-    -- UI
-    
-
-    local uiOrder = {
-        "Keybinds",
-        "Window",
-        "Notifications",
-        "Components",
+    local destroyOrder = {
+        "Players",
+        "Math",
+        "Helpers",
     }
 
-    for _, name in ipairs(uiOrder) do
+    for _, name in ipairs(
+        destroyOrder
+    ) do
 
-        SafeDestroy(
-            self.UI[name]
-        )
-    end
+        local module =
+            self.Modules[name]
 
-    
-    -- CORE
-    
-
-    local coreOrder = {
-        "Character",
-        "Connections",
-        "Cleanup",
-        "FeatureRegistry",
-        "Signal",
-        "Logger",
-        "Config",
-    }
-
-    for _, name in ipairs(coreOrder) do
-
-        if name ~= "FeatureManager" then
+        if module then
 
             SafeDestroy(
-                self.Core[name]
+                module
             )
         end
     end
 
+    self.Helpers = nil
+    self.Math = nil
+    self.Players = nil
+
     self.Modules = {}
-    self.Core = {}
-    self.Utils = {}
-    self.Features = {}
-    self.UI = {}
-    self.API = {}
 
     self.Initialized = false
     self.Running = false
+
+    LoadedPaths = {}
 
     return true
 end
 
 
+
 -- BOOTSTRAP
 
 
-local success, errorMessage =
+local success,
+    errorMessage =
     pcall(function()
-        Init:Initialize()
+
+        Utils:Initialize()
+
     end)
 
 if not success then
 
     warn(
-        "[Lua Test] Framework initialization failed:",
+        "[Lua Test] Utils initialization failed:",
         errorMessage
     )
 
-    return Init
+    return Utils
 end
 
-return Init
+
+return Utils
